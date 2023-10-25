@@ -71,6 +71,16 @@ class array_dims {
   bool operator!=(const array_dims& other) { return !operator==(other); }
 };
 
+/** Tracks num slots in a tuple for array of tuple consistency.
+ */
+class tuple_slots {
+ public:
+  size_t slots;
+  size_t slots_acc;
+  bool is_first;
+  tuple_slots() : slots(0), slots_acc(0), is_first(true) {}
+};
+
 /**
  * A <code>json_data_handler</code> is an implementation of a
  * <code>json_handler</code> that restricts the allowed JSON text
@@ -174,7 +184,7 @@ class json_data_handler : public stan::json::json_handler {
     }
     key = boost::algorithm::join(keys, ".");
     if (slot_dims_map.count(key) != 1)
-      unexpected_error(key);
+      unexpected_error(key, "not an array");
     return slot_dims_map[key];
   }
 
@@ -190,7 +200,7 @@ class json_data_handler : public stan::json::json_handler {
     }
     if (stack.empty()) {
       key = boost::algorithm::join(key_stack, ".");
-      unexpected_error(key);
+      unexpected_error(key, "ill-formed array");
     }
     slot_dims_map[key] = update;
   }
@@ -207,6 +217,7 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   /* Save non-tuple vars and innermost tuple slots to vars_i and vars_r.
+   * Converts multi-dim arrays from row-major to column major.
    * For arrays of tuples we need to check that new elements are consistent
    * with previous tuple elements.
    */
@@ -215,17 +226,27 @@ class json_data_handler : public stan::json::json_handler {
       return;
     std::string key = key_str();
     if (slot_types_map.count(key) < 1)
-      unexpected_error(key);
+      unexpected_error(key, "unknown variable");
     if (slot_types_map[key] == meta_type::SCALAR
         || slot_types_map[key] == meta_type::ARRAY) {
-      bool is_new
-          = (vars_r.count(key) == 0 && vars_i.count(key) == 0);
+      bool is_new = (vars_r.count(key) == 0 && vars_i.count(key) == 0);
       bool is_int = int_slots_map[key];
       bool is_real = vars_r.count(key) == 1;
-      bool was_int = vars_i.count(key) == 1;
+      bool was_int = !is_int && vars_i.count(key) == 1;
       std::vector<size_t> dims;
       if (slot_dims_map.count(key) == 1)
         dims = slot_dims_map[key].dims;
+      if (dims.size() > 1) {
+        if (is_int) {
+          std::vector<int> cm_values_i(values_i.size());
+          to_column_major(key, cm_values_i, values_i, dims);
+          values_i.assign(cm_values_i.begin(), cm_values_i.end());
+        } else {
+          std::vector<double> cm_values_r(values_r.size());
+          to_column_major(key, cm_values_r, values_r, dims);
+          values_r.assign(cm_values_r.begin(), cm_values_r.end());
+        }
+      }
       if (is_new) {
         var_types_map[key] = slot_types_map[key];
         if (is_int) {
@@ -238,13 +259,46 @@ class json_data_handler : public stan::json::json_handler {
           vars_r[key] = pair;
         }
       } else {
-        // if (!is_array_tuples(key_stack)) {
-        //   std::stringstream errorMsg;
-        //   errorMsg << "Attempt to redefine variable: " << key << ".";
-        //   throw json_error(errorMsg.str());
-        // }
+        bool is_aot = false;
+        std::string vname;
+        for (auto& key : key_stack) {
+          vname.append(key);
+          if (slot_types_map[vname] == meta_type::ARRAY_OF_TUPLES) {
+            is_aot = true;
+            break;
+          }
+          vname.append(".");
+        }
+        if (!is_aot)
+          unexpected_error(key, "not array of tuples");
+        bool consistent = true;
+        if (is_int || was_int) {
+          auto expect_dims = vars_i[key].second;
+          size_t expect_vals_len = 1;
+          for (auto& x : expect_dims)
+            expect_vals_len *= x;
+          if (is_int) {
+            if (expect_vals_len != values_i.size())
+              consistent = false;
+          } else {
+            if (expect_vals_len != values_r.size())
+              consistent = false;
+          }
+        } else {
+          auto expect_dims = vars_r[key].second;
+          size_t expect_vals_len = 1;
+          for (auto& x : expect_dims)
+            expect_vals_len *= x;
+          if (expect_vals_len != values_r.size())
+            consistent = false;
+        }
+        if (!consistent) {
+          std::stringstream errorMsg;
+          errorMsg << "Variable " << key
+                   << ": size mismatch between tuple elements.";
+          throw json_error(errorMsg.str());
+        }
         var_types_map[key] = meta_type::ARRAY;
-        std::vector<size_t> dims = slot_dims_map[key].dims;
         if ((!is_int && was_int) || (is_int && is_real)) {  // promote to double
           std::vector<double> values_tmp;
           for (auto& x : vars_i[key].first) {
@@ -270,13 +324,10 @@ class json_data_handler : public stan::json::json_handler {
     key_stack.pop_back();
   }
 
-  /* Process array variables
-   *  a. for array of tuples, concatenate dimensions
-   *  b. if multi-dim array, convert vector of values
-   *      from row-major order to column-major order.
-   * Update vars_i and vars_r accordingly.
+  /* For array of tuples, concatenate dimensions
+   * Update vars_i and vars_r dimensions accordingly.
    */
-  void convert_arrays() {
+  void update_array_dims() {
     for (auto const& var : var_types_map) {
       if (var.second != meta_type::ARRAY) {
         continue;
@@ -295,27 +346,15 @@ class json_data_handler : public stan::json::json_handler {
         slot.append(".");
       }
       if (vars_i.count(var.first) == 1) {
-        std::pair<std::vector<int>, std::vector<size_t>> pair;
-        if (all_dims.size() > 1) {
-          std::vector<int> cm_values_i(vars_i[var.first].first.size());
-          to_column_major(var.first, cm_values_i, vars_i[var.first].first,
-                          all_dims);
-          pair = make_pair(cm_values_i, all_dims);
-        } else {
-          pair = make_pair(vars_i[var.first].first, all_dims);
-        }
-        vars_i[var.first] = pair;
+        if (all_dims.size() == vars_i[var.first].second.size())
+          continue;
+        else
+          vars_i[var.first].second.assign(all_dims.begin(), all_dims.end());
       } else if (vars_r.count(var.first) == 1) {
-        std::pair<std::vector<double>, std::vector<size_t>> pair;
-        if (all_dims.size() > 1) {
-          std::vector<double> cm_values_r(vars_r[var.first].first.size());
-          to_column_major(var.first, cm_values_r, vars_r[var.first].first,
-                          all_dims);
-          pair = make_pair(cm_values_r, all_dims);
-        } else {
-          pair = make_pair(vars_r[var.first].first, all_dims);
-        }
-        vars_r[var.first] = pair;
+        if (all_dims.size() == vars_r[var.first].second.size())
+          continue;
+        else
+          vars_r[var.first].second.assign(all_dims.begin(), all_dims.end());
       } else {
         std::stringstream errorMsg;
         errorMsg << "Variable: " << var.first << ", ill-formed JSON.";
@@ -342,9 +381,9 @@ class json_data_handler : public stan::json::json_handler {
     }
   }
 
-  void unexpected_error(std::string where) {
+  void unexpected_error(const std::string& where, const std::string& what) {
     std::stringstream errorMsg;
-    errorMsg << "Variable " << where << " ill-formed data.";
+    errorMsg << "Variable " << where << ", " << what << ".";
     throw json_error(errorMsg.str());
   }
 
@@ -384,13 +423,14 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   /** Once all variable definitions have been processed,
-   *  convert arrays from row-major to column-major.
+   *  update dimensions for array of tuple variables.
    */
-  void end_text() { convert_arrays(); }
+  void end_text() { update_array_dims(); }
 
   /** A key is either a top-level Stan variable name or a tuple slot id.
    *  Logic handles edge case where key is the first slot of a tuple;
-   *  the name of the enclosing object is not used in the generated C++.
+   *  the name of the enclosing object is not used in the generated C++,
+   *  but we still need to track the number of tuple slots.
    */
   void key(const std::string& key) {
     if (event != meta_event::OBJ_OPEN) {
@@ -398,44 +438,80 @@ class json_data_handler : public stan::json::json_handler {
     }
     event = meta_event::KEY;
     reset_values();
+    std::string outer = key_str();
     key_stack.push_back(key);
-    if (key_stack.size() == 1 && slot_types_map.count(key_str()) == 1) {
+    if (key_stack.size() == 1 && slot_types_map.count(key) == 1) {
       std::stringstream errorMsg;
       errorMsg << "Attempt to redefine variable: " << key << ".";
       throw json_error(errorMsg.str());
     }
-    if (slot_types_map.count(key_str()) == 0) {
-      slot_types_map[key_str()] = meta_type::SCALAR;
-      int_slots_map[key_str()] = true;
+    std::string vname = key_str();
+    if (slot_types_map.count(vname) == 0) {
+      slot_types_map[vname] = meta_type::SCALAR;
+      int_slots_map[vname] = true;
     }
+    // if (key_stack.size() > 1
+    //     && slot_types_map[outer] == meta_type::TUPLE) {
+    //   if (tuple_slots_map.count(outer) == 0)
+    //     unexpected_error(vname);
+    //   if (tuple_slots_map[outer].is_first)
+    //     tuple_slots_map[outer].slots++;
+    //   else
+    //     tuple_slots_map[outer].slots_acc++;
+    // }
   }
 
-  /** A start object ("{") event changes the meta-type of the current key.
+  /**
+   * A start object ("{") event changes the meta-type of the current key.
+   * Initialize or update tuple slots.
    */
   void start_object() {
     event = meta_event::OBJ_OPEN;
     if (is_init())
       return;
-    if (slot_types_map[key_str()] == meta_type::ARRAY) {
-      slot_types_map[key_str()] = meta_type::ARRAY_OF_TUPLES;
+    std::string key = key_str();
+    if (slot_types_map[key] == meta_type::ARRAY) {
+      slot_types_map[key] = meta_type::ARRAY_OF_TUPLES;
     } else if (slot_types_map[key_str()] == meta_type::SCALAR) {
       slot_types_map[key_str()] = meta_type::TUPLE;
     }
+    // if (tuple_slots_map.count(key) == 0) {
+    //   tuple_slots slots;
+    //   tuple_slots_map[key] = slots;
+    // } else {
+    //   tuple_slots_map[key].is_first = false;
+    // }
   }
 
   /** An end object ("}") event closes either the top-level object or a tuple.
-   *  If the latter, when the enclosing object is an array of tuples, we must
-   *  record of check the array size for the current array dimension.
+   *  If the latter, we record or check the number of tuple slots.
+   *  If this is an array of tuples, we record or check the size of the
+   *  current array dim as well.
    */
   void end_object() {
     event = meta_event::OBJ_CLOSE;
-    if (key_stack.size() > 1
-        && slot_types_map[outer_key_str()] == meta_type::ARRAY_OF_TUPLES) {
-      array_dims outer = get_outer_dims(key_stack);
-      if (!outer.dims.empty()) {
-        outer.dims_acc[outer.dims.size() - 1]++;
-        set_outer_dims(outer);
+    if (key_stack.size() > 1) {
+      std::string tuple = outer_key_str();
+      if (slot_types_map[tuple] == meta_type::ARRAY_OF_TUPLES) {
+        array_dims outer = get_outer_dims(key_stack);
+        if (!outer.dims.empty()) {
+          outer.dims_acc[outer.dims.size() - 1]++;
+          set_outer_dims(outer);
+        }
       }
+      // if (tuple_slots_map.count(tuple) == 0)
+      //   unexpected_error(tuple);
+      // if (tuple_slots_map[tuple].is_first) {
+      //   tuple_slots_map[tuple].is_first = false;
+      // } else {
+      //   if (tuple_slots_map[tuple].slots_acc != tuple_slots_map[tuple].slots)
+      //   {
+      //     std::stringstream errorMsg;
+      //     errorMsg << "Variable " << tuple << ": size mismatch between tuple
+      //     elements."; throw json_error(errorMsg.str());
+      //   }
+      //   tuple_slots_map[tuple].slots_acc = 0;
+      // }
     }
     save_key_value_pair();
   }
@@ -459,7 +535,7 @@ class json_data_handler : public stan::json::json_handler {
     if (slot_types_map[key] == meta_type::SCALAR)
       slot_types_map[key] = meta_type::ARRAY;
     else if (slot_types_map[key] == meta_type::TUPLE)
-      unexpected_error(key);
+      unexpected_error(key, "ill-formed tuple");
     array_dims dims;
     if (slot_dims_map.count(key) == 1)
       dims = slot_dims_map[key];
@@ -483,7 +559,7 @@ class json_data_handler : public stan::json::json_handler {
    */
   void end_array() {
     if (slot_dims_map.count(key_str()) == 0)
-      unexpected_error(key_str());
+      unexpected_error(key_str(), "ill-formed array");
     std::string key(key_str());
     array_dims dims = slot_dims_map[key];
     int idx = dims.cur_dim - 1;
