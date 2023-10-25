@@ -4,6 +4,7 @@
 #include <stan/io/json/json_handler.hpp>
 #include <stan/io/json/rapidjson_parser.hpp>
 
+#include <test/unit/util.hpp>
 #include <test/unit/io/json/util.hpp>
 
 #include <boost/limits.hpp>
@@ -369,6 +370,27 @@ TEST(ioJson, jsonData_empty_3D_array_2_1_0) {
   } catch (const std::exception &e) {
     FAIL();
   }
+}
+
+TEST(ioJson, jsonData_x_3d_y_2d_z_0d) {
+  std::vector<std::string> json_path;
+  json_path = {"src", "test", "unit", "io", "test_json_files", "arrays.json"};
+  std::string filename = paths_to_fname(json_path);
+  std::ifstream in(filename);
+  stan::json::json_data jdata(in);
+
+  std::vector<double> expected_vals_x
+      = {11.1, 31, 21, 41, 12, 32, 22.2, 42, 13, 33.3, 23, 43};
+  std::vector<size_t> expected_dims_x = {2, 2, 3};
+  test_real_var(jdata, "x", expected_vals_x, expected_dims_x);
+
+  std::vector<double> expected_vals_y = {1, 3.3, 2.2, 4};
+  std::vector<size_t> expected_dims_y = {2, 2};
+  test_real_var(jdata, "y", expected_vals_y, expected_dims_y);
+
+  std::vector<double> expected_vals_z = {3.214};
+  std::vector<size_t> expected_dims_z;
+  test_real_var(jdata, "z", expected_vals_z, expected_dims_z);
 }
 
 TEST(ioJson, jsonData_array_err1) {
