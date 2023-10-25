@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 #include <boost/algorithm/string.hpp>
+#include <boost/regex.hpp>
 
 namespace stan {
 
@@ -86,8 +87,8 @@ class tuple_slots {
  * <code>json_handler</code> that restricts the allowed JSON text
  * to a single JSON object which define Stan variables.
  * The handler is responsible for populating the data structures
- * `vars_r` and `vars_i` which map variable names to the values and
- * dimensions found in the JSON.
+ * `vars_r` and `vars_i` which map Stan variable names to the values
+ * and dimensions found in the JSON.
  *
  * In the JSON, each Stan variable is a JSON key : value pair.
  * The key is a string (the Stan variable name) and the value
@@ -110,8 +111,13 @@ class tuple_slots {
  * both the array dimension and whether or not the values found so far
  * are of type real or int.  To do this, the handler uses a series of
  * maps between tuple slots seen so far and the C++ storage type (int or real),
- * the variable meta-type (array, tuple, or array of tuples), and if an array
- * variable, the dimensions of the array.
+ * the variable meta-type (array, tuple, or array of tuples).
+ * For arrays of tuples, we need to ensure that all tuple elements of an array
+ * are of the same shape.  To do this we track the number of slots in the tuple
+ * as well as the dimensions of any array slots in the tuple.
+ *
+ * The JSON object can have non-Stan variable entries.  The handler will
+ * ignore these entries.
  */
 class json_data_handler : public stan::json::json_handler {
  private:
@@ -121,12 +127,14 @@ class json_data_handler : public stan::json::json_handler {
   std::map<std::string, int> var_types_map;   // vars_r and vars_i entries
   std::map<std::string, int> slot_types_map;  // all slots all vars parsed
   std::map<std::string, array_dims> slot_dims_map;
+  std::map<std::string, tuple_slots> tuple_slots_map;
   std::map<std::string, bool> int_slots_map;
   std::vector<double> values_r;  // accumulates real var values
-  std::vector<int> values_i;     // accumulates int var values
-  size_t array_start_i;          // index into values_i
-  size_t array_start_r;          // index into values_r
-  int event;
+  std::vector<int> values_i;  // accumulates int var values
+  size_t array_start_i;  // index into values_i
+  size_t array_start_r;  // index into values_r
+  int event;  // tracks most recent meta_event
+  bool not_stan_var;  // allow non-Stan entries in JSON object
 
   void reset_values() {
     // Once var values have been copied into var_context maps,
@@ -157,6 +165,11 @@ class json_data_handler : public stan::json::json_handler {
             && values_r.empty() && values_i.empty() && slot_dims_map.empty()
             && array_start_i == 0 && array_start_r == 0
             && int_slots_map.empty());
+  }
+
+  bool invalid_varname(const std::string& name)   {
+    static const boost::regex re("[a-zA-Z][a-zA-Z0-9_]*");
+    return !regex_match(name, re);
   }
 
   bool is_array_tuples(const std::vector<std::string>& keys) {
@@ -224,6 +237,10 @@ class json_data_handler : public stan::json::json_handler {
   void save_key_value_pair() {
     if (key_stack.empty())
       return;
+    if (not_stan_var) {
+      key_stack.pop_back();
+      return;
+    }
     std::string key = key_str();
     if (slot_types_map.count(key) < 1)
       unexpected_error(key, "unknown variable");
@@ -402,6 +419,7 @@ class json_data_handler : public stan::json::json_handler {
         var_types_map(),
         slot_types_map(),
         slot_dims_map(),
+        tuple_slots_map(),
         int_slots_map(),
         values_r(),
         values_i(),
@@ -418,8 +436,10 @@ class json_data_handler : public stan::json::json_handler {
     var_types_map.clear();
     slot_types_map.clear();
     slot_dims_map.clear();
+    tuple_slots_map.clear();
     int_slots_map.clear();
     reset_values();
+    not_stan_var = true;
   }
 
   /** Once all variable definitions have been processed,
@@ -440,25 +460,28 @@ class json_data_handler : public stan::json::json_handler {
     reset_values();
     std::string outer = key_str();
     key_stack.push_back(key);
+    if (key_stack.size() == 1) {
+      not_stan_var = invalid_varname(key);
+    }
+    if (not_stan_var)
+      return;
     if (key_stack.size() == 1 && slot_types_map.count(key) == 1) {
       std::stringstream errorMsg;
       errorMsg << "Attempt to redefine variable: " << key << ".";
       throw json_error(errorMsg.str());
+    } else if (key_stack.size() > 1
+               && slot_types_map[outer] == meta_type::ARRAY_OF_TUPLES) {
+      if (tuple_slots_map[outer].is_first) {
+        tuple_slots_map[outer].slots++;
+      } else {
+        tuple_slots_map[outer].slots_acc++;
+      }
     }
     std::string vname = key_str();
     if (slot_types_map.count(vname) == 0) {
       slot_types_map[vname] = meta_type::SCALAR;
       int_slots_map[vname] = true;
     }
-    // if (key_stack.size() > 1
-    //     && slot_types_map[outer] == meta_type::TUPLE) {
-    //   if (tuple_slots_map.count(outer) == 0)
-    //     unexpected_error(vname);
-    //   if (tuple_slots_map[outer].is_first)
-    //     tuple_slots_map[outer].slots++;
-    //   else
-    //     tuple_slots_map[outer].slots_acc++;
-    // }
   }
 
   /**
@@ -467,7 +490,7 @@ class json_data_handler : public stan::json::json_handler {
    */
   void start_object() {
     event = meta_event::OBJ_OPEN;
-    if (is_init())
+    if (is_init() || not_stan_var)
       return;
     std::string key = key_str();
     if (slot_types_map[key] == meta_type::ARRAY) {
@@ -475,21 +498,28 @@ class json_data_handler : public stan::json::json_handler {
     } else if (slot_types_map[key_str()] == meta_type::SCALAR) {
       slot_types_map[key_str()] = meta_type::TUPLE;
     }
-    // if (tuple_slots_map.count(key) == 0) {
-    //   tuple_slots slots;
-    //   tuple_slots_map[key] = slots;
-    // } else {
-    //   tuple_slots_map[key].is_first = false;
-    // }
+    if (slot_types_map[key] == meta_type::ARRAY_OF_TUPLES) {
+      if (tuple_slots_map.count(key) == 0) {
+        tuple_slots slots;
+        tuple_slots_map[key] = slots;
+      } else {
+        tuple_slots_map[key].is_first = false;
+        tuple_slots_map[key].slots_acc = 0;
+      }
+    }
   }
 
   /** An end object ("}") event closes either the top-level object or a tuple.
-   *  If the latter, we record or check the number of tuple slots.
-   *  If this is an array of tuples, we record or check the size of the
-   *  current array dim as well.
+   *  If this is an array of tuples, track or check the number tuple slots
+   *  and the array size.
    */
   void end_object() {
     event = meta_event::OBJ_CLOSE;
+    if (not_stan_var) {
+      if (!key_stack.empty())
+        key_stack.pop_back();
+      return;
+    }
     if (key_stack.size() > 1) {
       std::string tuple = outer_key_str();
       if (slot_types_map[tuple] == meta_type::ARRAY_OF_TUPLES) {
@@ -498,20 +528,20 @@ class json_data_handler : public stan::json::json_handler {
           outer.dims_acc[outer.dims.size() - 1]++;
           set_outer_dims(outer);
         }
+        if (tuple_slots_map.count(tuple) == 0)
+          unexpected_error(tuple, "found close object, not a tuple var");
+        if (tuple_slots_map[tuple].is_first) {
+          tuple_slots_map[tuple].is_first = false;
+        } else {
+          if (tuple_slots_map[tuple].slots_acc
+              != tuple_slots_map[tuple].slots) {
+            std::stringstream errorMsg;
+            errorMsg << "Variable " << tuple
+                     << ": size mismatch between tuple elements.";
+            throw json_error(errorMsg.str());
+          }
+        }
       }
-      // if (tuple_slots_map.count(tuple) == 0)
-      //   unexpected_error(tuple);
-      // if (tuple_slots_map[tuple].is_first) {
-      //   tuple_slots_map[tuple].is_first = false;
-      // } else {
-      //   if (tuple_slots_map[tuple].slots_acc != tuple_slots_map[tuple].slots)
-      //   {
-      //     std::stringstream errorMsg;
-      //     errorMsg << "Variable " << tuple << ": size mismatch between tuple
-      //     elements."; throw json_error(errorMsg.str());
-      //   }
-      //   tuple_slots_map[tuple].slots_acc = 0;
-      // }
     }
     save_key_value_pair();
   }
@@ -525,6 +555,8 @@ class json_data_handler : public stan::json::json_handler {
     if (key_stack.empty()) {
       throw json_error("Expecting JSON object, found array.");
     }
+    if (not_stan_var)
+      return;
     std::string key(key_str());
     if (slot_types_map[key] == meta_type::SCALAR
         && !(values_r.empty() && values_r.empty())) {
@@ -558,6 +590,8 @@ class json_data_handler : public stan::json::json_handler {
    *  else check that the size of this row matches recorded row size.
    */
   void end_array() {
+    if (not_stan_var)
+      return;
     if (slot_dims_map.count(key_str()) == 0)
       unexpected_error(key_str(), "ill-formed array");
     std::string key(key_str());
@@ -594,6 +628,8 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   void null() {
+    if (not_stan_var)
+      return;
     std::stringstream errorMsg;
     errorMsg << "Variable: " << key_str()
              << ", error: null values not allowed.";
@@ -601,6 +637,8 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   void boolean(bool p) {
+    if (not_stan_var)
+      return;
     std::stringstream errorMsg;
     errorMsg << "Variable: " << key_str()
              << ", error: boolean values not allowed.";
@@ -608,6 +646,8 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   void string(const std::string& s) {
+    if (not_stan_var)
+      return;
     double tmp;
     if (0 == s.compare("-Inf")) {
       tmp = -std::numeric_limits<double>::infinity();
@@ -630,11 +670,15 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   void number_double(double x) {
+    if (not_stan_var)
+      return;
     promote_to_double();
     values_r.push_back(x);
   }
 
   void number_int(int n) {
+    if (not_stan_var)
+      return;
     if (int_slots_map[key_str()]) {
       values_i.push_back(n);
     } else {
@@ -643,6 +687,8 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   void number_unsigned_int(unsigned n) {
+    if (not_stan_var)
+      return;
     // if integer overflow, promote numeric data to double
     if (n > (unsigned)std::numeric_limits<int>::max())
       promote_to_double();
@@ -654,11 +700,15 @@ class json_data_handler : public stan::json::json_handler {
   }
 
   void number_int64(int64_t n) {
+    if (not_stan_var)
+      return;
     // the number doesn't fit in int (otherwise number_int() would be called)
     number_double(n);
   }
 
   void number_unsigned_int64(uint64_t n) {
+    if (not_stan_var)
+      return;
     // the number doesn't fit in int (otherwise number_unsigned_int() would be
     // called)
     number_double(n);
