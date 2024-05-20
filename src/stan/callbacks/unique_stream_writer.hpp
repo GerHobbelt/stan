@@ -22,7 +22,8 @@ class unique_stream_writer final : public writer {
    * Constructs a unique stream writer with an output stream
    * and an optional prefix for comments.
    *
-   * @param[in, out] A unique pointer to a type inheriting from `std::ostream`
+   * @param[in, out] output unique pointer to a type inheriting from
+   * `std::ostream`
    * @param[in] comment_prefix string to stream before each comment line.
    *  Default is "".
    */
@@ -54,8 +55,6 @@ class unique_stream_writer final : public writer {
    * @param[in] names Names in a std::vector
    */
   void operator()(const std::vector<std::string>& names) {
-    if (output_ == nullptr)
-      return;
     write_vector(names);
   }
   /**
@@ -74,8 +73,6 @@ class unique_stream_writer final : public writer {
   void operator()(const std::vector<double>& state) { write_vector(state); }
 
   void operator()(const std::tuple<Eigen::VectorXd, Eigen::VectorXd>& state) {
-    if (output_ == nullptr)
-      return;
     Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols,
                                  ", ", "", "", "\n", "", "");
     *output_ << std::get<0>(state).transpose().eval();
@@ -93,11 +90,7 @@ class unique_stream_writer final : public writer {
   /**
    * Writes the comment_prefix to the stream followed by a newline.
    */
-  void operator()() {
-    if (output_ == nullptr)
-      return;
-    *output_ << comment_prefix_ << std::endl;
-  }
+  void operator()() { *output_ << comment_prefix_ << std::endl; }
 
   /**
    * Writes the comment_prefix then the message followed by a newline.
@@ -105,8 +98,6 @@ class unique_stream_writer final : public writer {
    * @param[in] message A string
    */
   void operator()(const std::string& message) {
-    if (output_ == nullptr)
-      return;
     *output_ << comment_prefix_ << message << std::endl;
   }
 
@@ -131,8 +122,6 @@ class unique_stream_writer final : public writer {
    */
   template <class T>
   void write_vector(const std::vector<T>& v) {
-    if (output_ == nullptr)
-      return;
     if (v.empty()) {
       return;
     }

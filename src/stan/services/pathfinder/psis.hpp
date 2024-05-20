@@ -40,7 +40,7 @@ inline Eigen::Array<double, -1, 1> profile_loglikelihood(const EigArray1& theta,
 /**
  * Estimate parameters of the Generalized Pareto distribution
  *
- * Given a sample `x`, Estimate the parameters `k` and $\sigma$ of
+ * Given a sample `x`, Estimate the parameters `k` and $sigma$ of
  * the Generalized Pareto Distribution (GPD), assuming the location parameter is
  * 0. By default the fit uses a prior for `k`, which will stabilize
  * estimates for very small sample sizes (and low effective sample sizes in the
@@ -59,12 +59,13 @@ inline Eigen::Array<double, -1, 1> profile_loglikelihood(const EigArray1& theta,
  * @details Here the parameter `k is the negative of `k` in Zhang & Stephens
  * (2009).
  *
- * @references
+ * references:
  * Zhang, J., and Stephens, M. A. (2009). A new and efficient estimation method
  * for the generalized Pareto distribution. *Technometrics* **51**, 316-325.
  */
 template <typename EigArray>
-inline auto gpdfit(const EigArray& x, const Eigen::Index min_grid_pts = 30) {
+inline std::pair<double, double> gpdfit(const EigArray& x,
+                                        const Eigen::Index min_grid_pts = 30) {
   using array_vec_t = Eigen::Array<double, -1, 1>;
   constexpr auto prior = 3.0;
   const auto& x_ref = stan::math::to_ref(x);
@@ -77,19 +78,19 @@ inline auto gpdfit(const EigArray& x, const Eigen::Index min_grid_pts = 30) {
       static_cast<Eigen::Index>(std::floor(static_cast<double>(N) / 4.0 + 0.5))
       - 1l);
   array_vec_t theta
-      = (1.0 / x_ref.coeff(N - 1)
-         + (1.0 - (M / (linspaced_arr - 0.5)).sqrt()) / (prior * x_1st_qt));
+      = 1.0 / x_ref.coeff(N - 1)
+        + (1.0 - (M / (linspaced_arr - 0.5)).sqrt()) / (prior * x_1st_qt);
   // profile log-lik
   array_vec_t l_theta
-      = (static_cast<double>(N) * profile_loglikelihood(theta, x_ref));
+      = static_cast<double>(N) * profile_loglikelihood(theta, x_ref);
   auto normalized_theta = (l_theta - stan::math::log_sum_exp(l_theta)).exp();
   const double theta_hat = (theta * normalized_theta).sum();
   double k = (-theta_hat * x_ref).log1p().mean();
   const double sigma = -k / theta_hat;
   constexpr double a = 10;
   const double n_plus_a = N + a;
-  k = k * N / n_plus_a + a * 0.5 / n_plus_a;
-  return std::make_pair(sigma, k);
+  auto k_weighted = k * N / n_plus_a + a * 0.5 / n_plus_a;
+  return {sigma, k_weighted};
 }
 
 /**
@@ -105,7 +106,7 @@ inline auto gpdfit(const EigArray& x, const Eigen::Index min_grid_pts = 30) {
  */
 template <typename EigArray>
 inline auto qgpd(const EigArray& p, const double k, const double sigma) {
-  return (sigma * stan::math::expm1(-k * (-p).log1p()) / k);
+  return sigma * stan::math::expm1(-k * (-p).log1p()) / k;
 }
 
 /**
@@ -137,102 +138,48 @@ inline auto psis_smooth_tail(const EigArray& x, const double cutoff) {
 }
 
 /**
- * This function takes the last element as pivot, places the pivot element at
- * its correct position in the sorted array, and places all values smaller than
- * the pivot to the left of the pivot and all greater elements to the right of
- * the pivot
+ * Sort the input arr and store the original indices for the sorted array in
+ * `idx`
  * @param[in, out] arr The Array of doubles to be sorted
  * @param[in, out] idx The index of the original positions of the elements of
  * `arr`. This is also sorted to keep track of the original positions of the
  * elements in `arr`.
- * @param[in] low Starting index of the sort
- * @param[in] high Ending index of the sort
  */
-inline Eigen::Index quick_sort_partition(Eigen::Array<double, -1, 1>& arr,
-                                         Eigen::Array<Eigen::Index, -1, 1>& idx,
-                                         const Eigen::Index low,
-                                         const Eigen::Index high) {
-  const double pivot = arr.coeff(high);  // pivot
-  Eigen::Index i = (low - 1l);           // Index of smaller element
-  for (Eigen::Index j = low; j <= high - 1; ++j) {
-    // If current element is smaller than or
-    // equal to pivot
-    if (arr.coeff(j) <= pivot) {
-      ++i;  // increment index of smaller element
-      std::swap(arr.coeffRef(i), arr.coeffRef(j));
-      std::swap(idx.coeffRef(i), idx.coeffRef(j));
-    }
+inline void dual_sort(Eigen::Array<double, -1, 1>& arr,
+                      Eigen::Array<Eigen::Index, -1, 1>& idx) {
+  std::vector<std::pair<double, int>> pair_vec;
+  pair_vec.reserve(arr.size());
+  for (std::size_t i = 0; i < arr.size(); ++i) {
+    pair_vec.emplace_back(arr[i], idx[i]);
   }
-  std::swap(arr.coeffRef(i + 1l), arr.coeffRef(high));
-  std::swap(idx.coeffRef(i + 1l), idx.coeffRef(high));
-  return (i + 1l);
+  std::sort(pair_vec.begin(), pair_vec.end(),
+            [](auto&& a, auto&& b) { return a.first < b.first; });
+  for (std::size_t i = 0; i < arr.size(); ++i) {
+    arr[i] = pair_vec[i].first;
+    idx[i] = pair_vec[i].second;
+  }
+  return;
 }
 
 /**
- * Runs quick_sort optionally in parallel
- * @tparam Parallel Whether to allow the algorithm to attempt to run in
- * parallel.
- * @param[in, out] arr The Array of doubles to be sorted
- * @param[in, out] idx The index of the original positions of the elements of
- * `arr`. This is also sorted to keep track of the original positions of the
- * elements in `arr`.
- * @param[in] low Starting index of the sort
- * @param[in] high Ending index of the sort
+ * Returns the index to the first element in the range [first, last) that does
+ * not satisfy element < value or last if no such element is found.
+ * @param arr The index (range) to search
+ * @param value The value to search for
+ * @return The index to the first element in the range [first, last) that does
+ * not satisfy element < value or last if no such element is found
  */
-template <bool DoParallel = true>
-inline void quick_sort(Eigen::Array<double, -1, 1>& arr,
-                       Eigen::Array<Eigen::Index, -1, 1>& idx,
-                       const Eigen::Index low, const Eigen::Index high) {
-  if (low < high) {
-    // pi is partitioning index, arr[p] is now at right place
-    const Eigen::Index partition_idx
-        = quick_sort_partition(arr, idx, low, high);
-    // Separately sort elements before partition and after partition
-    if (DoParallel && (high - low >= 400l)) {
-      tbb::parallel_invoke(
-          [&arr, &idx, low, partition_idx]() {
-            quick_sort(arr, idx, low, partition_idx - 1);
-          },
-          [&arr, &idx, high, partition_idx]() {
-            quick_sort(arr, idx, partition_idx + 1, high);
-          });
-    } else {
-      quick_sort<false>(arr, idx, low, partition_idx - 1);
-      quick_sort<false>(arr, idx, partition_idx + 1, high);
-    }
+inline auto lower_bound_idx(const Eigen::Array<double, -1, 1>& arr,
+                            const double value) {
+  Eigen::Index base = 0;
+  Eigen::Index search_len = arr.size();
+  while (search_len > 1) {
+    Eigen::Index half = search_len / 2;
+    // some compilers will replace this with  with a cmov
+    base += (arr.coeff(base + half) < value) * half;
+    search_len -= half;
   }
-}
-
-/**
- * Runs quick_sort optionally in parallel
- * @param[in, out] arr The Array of doubles to be sorted
- * @param[in, out] idx The index of the original positions of the elements of
- * `arr`. This is also sorted to keep track of the original positions of the
- * elements in `arr`.
- */
-inline void quick_sort(Eigen::Array<double, -1, 1>& arr,
-                       Eigen::Array<Eigen::Index, -1, 1>& idx) {
-  if (arr.size() >= 400l) {
-    quick_sort(arr, idx, 0l, arr.size() - 1l);
-  } else {
-    quick_sort<false>(arr, idx, 0l, arr.size() - 1l);
-  }
-}
-
-inline auto largest_insertion(const Eigen::Array<double, -1, 1>& top_n,
-                              const double value) {
-  const Eigen::Index top_size = top_n.size();
-  Eigen::Index low_idx = -1l;
-  Eigen::Index high_idx = top_size;
-  for (Eigen::Index low_idx = -1, probe_idx = (-1l + top_size) / 2l;
-       high_idx - low_idx > 1l; probe_idx = (low_idx + high_idx) / 2l) {
-    if (top_n.coeff(probe_idx) > value) {
-      high_idx = probe_idx;
-    } else {
-      low_idx = probe_idx;
-    }
-  }
-  return high_idx - 1l;
+  return base;
 }
 
 /**
@@ -248,10 +195,10 @@ largest_n_elements(const Eigen::Array<double, -1, 1>& arr,
   Eigen::Array<double, -1, 1> top_n = arr.head(top_size);
   Eigen::Array<Eigen::Index, -1, 1> top_n_idx
       = Eigen::Array<Eigen::Index, -1, 1>::LinSpaced(top_size, 0, top_size);
-  quick_sort(top_n, top_n_idx);
+  dual_sort(top_n, top_n_idx);
   for (Eigen::Index i = top_size; i < arr.size(); ++i) {
     if (arr.coeff(i) >= top_n.coeff(0)) {
-      const Eigen::Index starting_pos = largest_insertion(top_n, arr.coeff(i));
+      const Eigen::Index starting_pos = lower_bound_idx(top_n, arr.coeff(i));
       for (Eigen::Index k = 1; k <= starting_pos; ++k) {
         top_n.coeffRef(k - 1) = top_n.coeff(k);
       }
@@ -262,17 +209,20 @@ largest_n_elements(const Eigen::Array<double, -1, 1>& arr,
       top_n_idx.coeffRef(starting_pos) = i;
     }
   }
-  return std::make_pair(std::move(top_n), std::move(top_n_idx));
+  return {std::move(top_n), std::move(top_n_idx)};
 }
 }  // namespace internal
 
-/*
+/**
  * Compute Pareto smoothed importance sampling (PSIS) log weights.
  *
  * @tparam EigArray An Eigen type inheriting from `ArrayBase` with dynamic
+ * @tparam Logger A type derived from `stan::callbacks::logger`
  * compile time rows and 1 compile time column.
  * @param[in] log_ratios Array of logarithms of importance ratios
  * @param[in] tail_len Size of the tail
+ * @param[in,out] logger Stream for writing possible warnings
+ * @return An array with the weights for each observation for PSIS
  */
 template <typename EigArray, typename Logger>
 inline Eigen::Array<double, -1, 1> psis_weights(const EigArray& log_ratios,
@@ -306,9 +256,8 @@ inline Eigen::Array<double, -1, 1> psis_weights(const EigArray& log_ratios,
       }
       if (smoothed.second > 0.7) {
         logger.warn(std::string("Pareto k value (") +
-         std::to_string(smoothed.second) +
-         ") is greater than 0.7 which often indicates model"
-         " misspecification.");
+         std::to_string(smoothed.second) + ") is greater than 0.7 which often"
+         " indicates model" " misspecification.");
       }
     }
   }
@@ -320,7 +269,8 @@ inline Eigen::Array<double, -1, 1> psis_weights(const EigArray& log_ratios,
     }
   }
   auto max_adj = (llr_weights + max_log_ratio).eval();
-  return (max_adj - stan::math::log_sum_exp(max_adj)).exp();
+  auto max_adj_exp = max_adj.exp();
+  return max_adj_exp / max_adj_exp.sum();
 }
 
 }  // namespace psis
