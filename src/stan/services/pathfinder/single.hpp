@@ -99,9 +99,9 @@ struct elbo_est_t {
   size_t fn_calls{0};  // Number of times the log_prob function is called.
   Eigen::MatrixXd repeat_draws;  // Samples
   // Two column matrix. First column is approximate lp and second is true lp
-  Eigen::Array<double, -1, -1> lp_mat;
+  Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic> lp_mat;
   // Ratio of approximate lp to true lp.
-  Eigen::Array<double, -1, 1> lp_ratio;
+  Eigen::Array<double, Eigen::Dynamic, 1> lp_ratio;
 };
 
 /**
@@ -114,7 +114,6 @@ struct elbo_est_t {
  * @param u A matrix of gaussian IID samples with rows equal to the size of the
  * number of samples to be made and columns equal to the number of parameters.
  * @param taylor_approx Approximation from `taylor_approximation`.
- * @param alpha TODO: Define this
  * @return A matrix with rows equal to the number of samples and columns equal
  * to the number of parameters.
  */
@@ -188,8 +187,8 @@ inline Eigen::VectorXd approximate_samples(
  * @param num_samples The runtime number of samples.
  * @return A matrix of values generated from the `variate_generator`
  */
-template <Eigen::Index RowsAtCompileTime = -1,
-          Eigen::Index ColsAtCompileTime = -1, typename Generator>
+template <Eigen::Index RowsAtCompileTime = Eigen::Dynamic,
+          Eigen::Index ColsAtCompileTime = Eigen::Dynamic, typename Generator>
 inline Eigen::Matrix<double, RowsAtCompileTime, ColsAtCompileTime>
 generate_matrix(Generator&& variate_generator, const Eigen::Index num_params,
                 const Eigen::Index num_samples) {
@@ -235,7 +234,7 @@ inline elbo_est_t est_approx_draws(LPF&& lp_fun, ConstrainF&& constrain_fun,
   size_t lp_fun_calls = 0;
   Eigen::MatrixXd unit_samps
       = generate_matrix(rand_unit_gaus, num_params, num_samples);
-  Eigen::Array<double, -1, -1> lp_mat(num_samples, 2);
+  Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic> lp_mat(num_samples, 2);
   lp_mat.col(0) = (-taylor_approx.logdetcholHk)
                   + -0.5
                         * (unit_samps.array().square().colwise().sum()
@@ -260,7 +259,8 @@ inline elbo_est_t est_approx_draws(LPF&& lp_fun, ConstrainF&& constrain_fun,
     }
     log_stream(logger, pathfinder_ss);
   }
-  Eigen::Array<double, -1, 1> lp_ratio = lp_mat.col(1) - lp_mat.col(0);
+  Eigen::Array<double, Eigen::Dynamic, 1> lp_ratio
+      = lp_mat.col(1) - lp_mat.col(0);
   if (ReturnElbo) {
     double elbo = lp_ratio.mean();
     return elbo_est_t{elbo, lp_fun_calls, std::move(approx_samples),
@@ -543,7 +543,7 @@ auto pathfinder_impl(RNG&& rng, LPFun&& lp_fun, ConstrainFun&& constrain_fun,
  * @param[in] init_radius A non-negative value to initialize variables uniformly
  * in (-init_radius, init_radius) if not defined in the initialization var
  * context
- * @param[in] history_size  Non-negative value for (J in paper) amount of
+ * @param[in] max_history_size  Non-negative value for (J in paper) amount of
  * history to keep for L-BFGS
  * @param[in] init_alpha Non-negative value for line search step size for first
  * iteration
@@ -613,7 +613,7 @@ inline auto pathfinder_lbfgs_single(
                                            Eigen::Dynamic, true>;
   Optimizer lbfgs(model, cont_vector, disc_vector, std::move(ls_opts),
                   std::move(conv_opts), std::move(lbfgs_update), &lbfgs_ss);
-  const std::string path_num("Path: [" + std::to_string(stride_id) + "] ");
+  const std::string path_num("Path [" + std::to_string(stride_id) + "] :");
   if (refresh != 0) {
     logger.info(path_num + "Initial log joint density = "
                 + std::to_string(lbfgs.logp()));
@@ -628,20 +628,16 @@ inline auto pathfinder_lbfgs_single(
   boost::circular_buffer<Eigen::VectorXd> grad_buff(max_history_size);
   Eigen::VectorXd prev_params
       = Eigen::Map<Eigen::VectorXd>(cont_vector.data(), cont_vector.size());
-  Eigen::VectorXd prev_grads;
   std::size_t history_size = 0;
-  // Initial gradients
-  {
-    std::vector<double> g1;
-    double lp = stan::model::log_prob_grad<true, true>(model, cont_vector,
-                                                       disc_vector, g1);
-    prev_grads = Eigen::Map<Eigen::VectorXd>(g1.data(), num_parameters);
-    if (save_iterations) {
-      diagnostic_writer(std::make_tuple(
-          Eigen::Map<Eigen::VectorXd>(cont_vector.data(), num_parameters)
-              .eval(),
-          Eigen::Map<Eigen::VectorXd>(g1.data(), num_parameters).eval()));
-    }
+  Eigen::VectorXd prev_grads(num_parameters);
+  stan::model::log_prob_grad<true, true>(model, prev_params, prev_grads);
+  if (unlikely(save_iterations)) {
+    diagnostic_writer.begin_record();
+    diagnostic_writer.begin_record("0");
+    diagnostic_writer.write("iter", static_cast<int>(0));
+    diagnostic_writer.write("unconstrained_parameters", prev_params);
+    diagnostic_writer.write("grads", prev_grads);
+    diagnostic_writer.end_record();
   }
   auto constrain_fun = [&model](auto&& rng, auto&& unconstrained_draws,
                                 auto&& constrained_draws) {
@@ -652,113 +648,156 @@ inline auto pathfinder_lbfgs_single(
     return model.template log_prob<false, true>(u, &streamer);
   };
   Eigen::VectorXd alpha = Eigen::VectorXd::Ones(num_parameters);
-  Eigen::Index best_E = -1;
+  Eigen::Index best_iteration = -1;
   internal::elbo_est_t elbo_best;
   internal::taylor_approx_t taylor_approx_best;
   std::size_t num_evals{lbfgs.grad_evals()};
   Eigen::MatrixXd Ykt_mat(num_parameters, max_history_size);
   Eigen::MatrixXd Skt_mat(num_parameters, max_history_size);
+  std::string log_header = path_num + " Iter      log prob        ||dx||      "
+  "||grad||     alpha      alpha0      # evals       ELBO    Best ELBO        "
+  "Notes \n";
+  auto print_log_remainder = [](auto&& write_log_cond, auto&& msg, auto ret,
+                                auto num_evals, auto&& lbfgs, auto best_elbo,
+                                auto elbo, auto&& lbfgs_ss,
+                                auto&& logger) mutable {
+    if (write_log_cond) {
+      msg << std::setw(10) << num_evals << std::setw(11) << std::scientific
+          << std::setprecision(3) << elbo << std::setw(11) << std::scientific
+          << std::setprecision(3) << best_elbo << std::setw(18) << lbfgs.note();
+      logger.info(msg.str());
+      msg.clear();
+      msg.str("");
+    }
+  };
+
   while (ret == 0) {
     std::stringstream msg;
     interrupt();
     ret = lbfgs.step();
     double lp = lbfgs.logp();
-    if (refresh > 0
-        && (ret != 0 || !lbfgs.note().empty() || lbfgs.iter_num() == 0
-            || ((lbfgs.iter_num() + 1) % refresh == 0))) {
-      std::stringstream msg;
-      msg << path_num +
-          "    Iter"
-          "      log prob"
-          "        ||dx||"
-          "      ||grad||"
-          "       alpha"
-          "      alpha0"
-          "  # evals"
-          "  Notes \n";
-      msg << path_num << " " << std::setw(7) << lbfgs.iter_num() << " ";
-      msg << " " << std::setw(12) << std::setprecision(6) << lp << " ";
-      msg << " " << std::setw(12) << std::setprecision(6)
-          << lbfgs.prev_step_size() << " ";
-      msg << " " << std::setw(12) << std::setprecision(6)
-          << lbfgs.curr_g().norm() << " ";
-      msg << " " << std::setw(10) << std::setprecision(4) << lbfgs.alpha()
-          << " ";
-      msg << " " << std::setw(10) << std::setprecision(4) << lbfgs.alpha0()
-          << " ";
-      msg << " " << std::setw(7) << lbfgs.grad_evals() << " ";
-      msg << " " << lbfgs.note() << " ";
-      logger.info(msg.str());
+    bool write_log_cond
+        = refresh > 0
+          && (ret != 0 || !lbfgs.note().empty() || lbfgs.iter_num() == 0
+              || ((lbfgs.iter_num() + 1) % refresh == 0));
+    if (write_log_cond) {
+      msg << std::setw(5) << log_header << std::setw(15) << lbfgs.iter_num()
+          << std::setw(16) << std::scientific << std::setprecision(3) << lp
+          << std::setw(15) << std::scientific << std::setprecision(3)
+          << lbfgs.prev_step_size() << std::setw(12) << std::scientific
+          << std::setprecision(3) << lbfgs.curr_g().norm() << std::setw(13)
+          << std::scientific << std::setprecision(3) << lbfgs.alpha()
+          << std::setw(11) << std::scientific << std::setprecision(3)
+          << lbfgs.alpha0();
     }
-
-    if (lbfgs_ss.str().length() > 0) {
-      logger.info(lbfgs_ss);
-      lbfgs_ss.str("");
-    }
-    if (msg.str().length() > 0) {
-      logger.info(msg);
-    }
-    if (save_iterations) {
-      diagnostic_writer(std::make_tuple(lbfgs.curr_x(), lbfgs.curr_g()));
-    }
-
-    /*
-     * If the retcode is -1 then linesearch failed even with a hessian reset
-     * so the current vals and grads are the same as the previous iter
-     * and we are exiting
-     */
-    if (unlikely(ret == -1)) {
-      continue;
-    }
-    param_buff.push_back(lbfgs.curr_x() - prev_params);
-    grad_buff.push_back(lbfgs.curr_g() - prev_grads);
-    prev_params = lbfgs.curr_x();
-    prev_grads = lbfgs.curr_g();
     history_size = std::min(history_size + 1,
                             static_cast<std::size_t>(max_history_size));
-    if (internal::check_curve(param_buff.back(), grad_buff.back())) {
-      alpha = internal::form_diag(alpha, grad_buff.back(), param_buff.back());
-    }
-    Eigen::Map<Eigen::MatrixXd> Ykt_map(Ykt_mat.data(), num_parameters,
-                                        history_size);
-    for (Eigen::Index i = 0; i < history_size; ++i) {
-      Ykt_map.col(i) = grad_buff[i];
-    }
-    Eigen::Map<Eigen::MatrixXd> Skt_map(Skt_mat.data(), num_parameters,
-                                        history_size);
-    for (Eigen::Index i = 0; i < history_size; ++i) {
-      Skt_map.col(i) = param_buff[i];
-    }
-    std::string iter_msg(path_num + "Iter: [" + std::to_string(lbfgs.iter_num())
-                         + "] ");
 
-    auto pathfinder_res = internal::pathfinder_impl(
-        rng, lp_fun, constrain_fun, alpha, lbfgs.curr_x(), lbfgs.curr_g(),
-        Ykt_map, Skt_map, num_elbo_draws, iter_msg, logger);
-    num_evals += pathfinder_res.first.fn_calls;
-    if (pathfinder_res.first.elbo > elbo_best.elbo) {
-      elbo_best = std::move(pathfinder_res.first);
-      taylor_approx_best = std::move(pathfinder_res.second);
-      best_E = lbfgs.iter_num();
+    if (unlikely(save_iterations)) {
+      diagnostic_writer.begin_record(std::to_string(lbfgs.iter_num()));
+      diagnostic_writer.write("iter", lbfgs.iter_num());
+      diagnostic_writer.write("unconstrained_parameters", prev_params);
+      diagnostic_writer.write("grads", prev_grads);
+      diagnostic_writer.write("history_size", history_size);
     }
-    if (refresh > 0
-        && (lbfgs.iter_num() == 0 || (lbfgs.iter_num() % refresh == 0))) {
-      logger.info(iter_msg + ": ELBO ("
-                  + std::to_string(pathfinder_res.first.elbo) + ")");
+    // if retcode is -1, line search failed w/o updating vals/grads, so exit
+    // loop
+    if (unlikely(ret == -1)) {
+      print_log_remainder(
+          write_log_cond, msg, ret, num_evals, lbfgs, elbo_best.elbo,
+          std::numeric_limits<double>::quiet_NaN(), lbfgs_ss, logger);
+      if (save_iterations) {
+        diagnostic_writer.write("lbfgs_success", false);
+        diagnostic_writer.write("pathfinder_success", false);
+        diagnostic_writer.write("lbfgs_note", lbfgs_ss.str());
+        diagnostic_writer.end_record();
+      }
+      if (lbfgs_ss.str().length() > 0) {
+        logger.info(lbfgs_ss);
+        lbfgs_ss.str("");
+      }
+      break;
+    }
+    try {
+      param_buff.push_back(lbfgs.curr_x() - prev_params);
+      grad_buff.push_back(lbfgs.curr_g() - prev_grads);
+      prev_params = lbfgs.curr_x();
+      prev_grads = lbfgs.curr_g();
+      if (internal::check_curve(param_buff.back(), grad_buff.back())) {
+        alpha = internal::form_diag(alpha, grad_buff.back(), param_buff.back());
+      }
+      Eigen::Map<Eigen::MatrixXd> Ykt_map(Ykt_mat.data(), num_parameters,
+                                          history_size);
+      for (Eigen::Index i = 0; i < history_size; ++i) {
+        Ykt_map.col(i) = grad_buff[i];
+      }
+      Eigen::Map<Eigen::MatrixXd> Skt_map(Skt_mat.data(), num_parameters,
+                                          history_size);
+      for (Eigen::Index i = 0; i < history_size; ++i) {
+        Skt_map.col(i) = param_buff[i];
+      }
+      std::string iter_msg(path_num + "Iter: ["
+                           + std::to_string(lbfgs.iter_num()) + "] ");
+
+      auto pathfinder_res = internal::pathfinder_impl(
+          rng, lp_fun, constrain_fun, alpha, lbfgs.curr_x(), lbfgs.curr_g(),
+          Ykt_map, Skt_map, num_elbo_draws, iter_msg, logger);
+      num_evals += pathfinder_res.first.fn_calls;
+      print_log_remainder(write_log_cond, msg, ret, num_evals, lbfgs,
+                          pathfinder_res.first.elbo, pathfinder_res.first.elbo,
+                          lbfgs_ss, logger);
+      if (unlikely(save_iterations)) {
+        diagnostic_writer.write("lbfgs_success", true);
+        diagnostic_writer.write("pathfinder_success", true);
+        diagnostic_writer.write("x_center", pathfinder_res.second.x_center);
+        diagnostic_writer.write("logDetCholHk",
+                                pathfinder_res.second.logdetcholHk);
+        diagnostic_writer.write("L_approx", pathfinder_res.second.L_approx);
+        diagnostic_writer.write("Qk", pathfinder_res.second.Qk);
+        diagnostic_writer.write("alpha", pathfinder_res.second.alpha);
+        diagnostic_writer.write("full", pathfinder_res.second.use_full);
+        diagnostic_writer.write("lbfgs_note", lbfgs_ss.str());
+        diagnostic_writer.end_record();
+      }
+      if (lbfgs_ss.str().length() > 0) {
+        logger.info(lbfgs_ss);
+        lbfgs_ss.str("");
+      }
+
+      if (pathfinder_res.first.elbo > elbo_best.elbo) {
+        elbo_best = std::move(pathfinder_res.first);
+        taylor_approx_best = std::move(pathfinder_res.second);
+        best_iteration = lbfgs.iter_num();
+      }
+    } catch (const std::exception& e) {
+      if (unlikely(save_iterations)) {
+        diagnostic_writer.write("lbfgs_success", true);
+        diagnostic_writer.write("pathfinder_success", false);
+        diagnostic_writer.write("history_size", history_size);
+        diagnostic_writer.write("history_size", history_size);
+        diagnostic_writer.write("lbfgs_note", lbfgs_ss.str());
+        diagnostic_writer.write("pathfinder_error", std::string(e.what()));
+        diagnostic_writer.end_record();
+      }
+      if (lbfgs_ss.str().length() > 0) {
+        logger.info(lbfgs_ss);
+        lbfgs_ss.str("");
+      }
+      throw e;
     }
   }
-  num_evals += lbfgs.grad_evals();
-  if (ret >= 0) {
-    logger.info("Optimization terminated normally: ");
-  } else {
+  if (unlikely(save_iterations)) {
+    diagnostic_writer.end_record();
+  }
+  if (unlikely(ret <= 0)) {
     std::string prefix_err_msg
         = "Optimization terminated with error: " + lbfgs.get_code_string(ret);
     if (lbfgs.iter_num() < 2) {
       logger.info(prefix_err_msg
                   + " Optimization failed to start, pathfinder cannot be run.");
       return internal::ret_pathfinder<ReturnLpSamples>(
-          error_codes::SOFTWARE, Eigen::Array<double, -1, 1>(0),
-          Eigen::Array<double, -1, -1>(0, 0),
+          error_codes::SOFTWARE, Eigen::Array<double, Eigen::Dynamic, 1>(0),
+          Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic>(0, 0),
           std::atomic<size_t>{num_evals + lbfgs.grad_evals()});
     } else {
       logger.info(prefix_err_msg +
@@ -766,28 +805,28 @@ inline auto pathfinder_lbfgs_single(
           "incorrect results.");
     }
   }
-  if (best_E == -1) {
+  if (unlikely(best_iteration == -1)) {
     logger.info(path_num +
         "Failure: None of the LBFGS iterations completed "
         "successfully");
     return internal::ret_pathfinder<ReturnLpSamples>(
-        error_codes::SOFTWARE, Eigen::Array<double, -1, 1>(0),
-        Eigen::Array<double, -1, -1>(0, 0), num_evals);
+        error_codes::SOFTWARE, Eigen::Array<double, Eigen::Dynamic, 1>(0),
+        Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic>(0, 0), num_evals);
   } else {
     if (refresh != 0) {
-      logger.info(path_num + "Best Iter: [" + std::to_string(best_E)
+      logger.info(path_num + "Best Iter: [" + std::to_string(best_iteration)
                   + "] ELBO (" + std::to_string(elbo_best.elbo) + ")"
                   + " evalutions: (" + std::to_string(num_evals) + ")");
     }
   }
-  Eigen::Array<double, -1, -1> constrained_draws_mat;
-  Eigen::Array<double, -1, 1> lp_ratio;
+  Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic> constrained_draws_mat;
+  Eigen::Array<double, Eigen::Dynamic, 1> lp_ratio;
   auto&& elbo_draws = elbo_best.repeat_draws;
   auto&& elbo_lp_ratio = elbo_best.lp_ratio;
   auto&& elbo_lp_mat = elbo_best.lp_mat;
   const int remaining_draws = num_draws - elbo_lp_ratio.rows();
   const Eigen::Index num_unconstrained_params = names.size() - 2;
-  if (remaining_draws > 0) {
+  if (likely(remaining_draws > 0)) {
     try {
       internal::elbo_est_t est_draws = internal::est_approx_draws<false>(
           lp_fun, constrain_fun, rng, taylor_approx_best, remaining_draws,
@@ -796,13 +835,14 @@ inline auto pathfinder_lbfgs_single(
       auto&& new_lp_ratio = est_draws.lp_ratio;
       auto&& lp_draws = est_draws.lp_mat;
       auto&& new_draws = est_draws.repeat_draws;
-      lp_ratio = Eigen::Array<double, -1, 1>(new_lp_ratio.size()
-                                             + elbo_lp_ratio.size());
+      lp_ratio = Eigen::Array<double, Eigen::Dynamic, 1>(
+          new_lp_ratio.size() + elbo_lp_ratio.size());
       lp_ratio.head(elbo_lp_ratio.size()) = elbo_lp_ratio.array();
       lp_ratio.tail(new_lp_ratio.size()) = new_lp_ratio.array();
       const auto total_size = elbo_draws.cols() + new_draws.cols();
       constrained_draws_mat
-          = Eigen::Array<double, -1, -1>(names.size(), total_size);
+          = Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic>(names.size(),
+                                                                 total_size);
       Eigen::VectorXd unconstrained_col;
       Eigen::VectorXd approx_samples_constrained_col;
       for (Eigen::Index i = 0; i < elbo_draws.cols(); ++i) {
@@ -829,7 +869,8 @@ inline auto pathfinder_lbfgs_single(
           + "Returning the approximate samples used for ELBO calculation: "
           + err_msg);
       constrained_draws_mat
-          = Eigen::Array<double, -1, -1>(names.size(), elbo_draws.cols());
+          = Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic>(
+              names.size(), elbo_draws.cols());
       Eigen::VectorXd approx_samples_constrained_col;
       Eigen::VectorXd unconstrained_col;
       for (Eigen::Index i = 0; i < elbo_draws.cols(); ++i) {
@@ -843,7 +884,8 @@ inline auto pathfinder_lbfgs_single(
     }
   } else {
     constrained_draws_mat
-        = Eigen::Array<double, -1, -1>(names.size(), elbo_draws.cols());
+        = Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic>(
+            names.size(), elbo_draws.cols());
     Eigen::VectorXd approx_samples_constrained_col;
     Eigen::VectorXd unconstrained_col;
     for (Eigen::Index i = 0; i < elbo_draws.cols(); ++i) {
@@ -860,10 +902,9 @@ inline auto pathfinder_lbfgs_single(
   const auto end_pathfinder_time = std::chrono::steady_clock::now();
   const double pathfinder_delta_time = stan::services::util::duration_diff(
       start_pathfinder_time, end_pathfinder_time);
-  const auto time_header = std::string("Elapsed Time: ");
-  std::string pathfinder_time_str = time_header
-                                    + std::to_string(pathfinder_delta_time)
-                                    + " seconds (Pathfinder)";
+  std::string pathfinder_time_str = "Elapsed Time: ";
+  pathfinder_time_str += std::to_string(pathfinder_delta_time)
+                         + std::string(" seconds (Pathfinder)");
   parameter_writer(pathfinder_time_str);
   parameter_writer();
   return internal::ret_pathfinder<ReturnLpSamples>(
