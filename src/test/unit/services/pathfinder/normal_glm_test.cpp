@@ -1,11 +1,4 @@
 #include <stdexcept>
-/*
-#ifdef eigen_assert
-#undef eigen_assert
-#endif
-#define eigen_assert(x) \
-  if (!(x)) { throw (std::runtime_error("Nooo")); }
-*/
 #include <stan/callbacks/json_writer.hpp>
 #include <stan/io/array_var_context.hpp>
 #include <stan/io/empty_var_context.hpp>
@@ -53,7 +46,7 @@ class ServicesPathfinderGLM : public testing::Test {
 
   std::stringstream init_ss, parameter_ss, diagnostic_ss, model_ss;
   stan::callbacks::stream_writer init;
-  stan::test::values parameter;
+  stan::test::in_memory_writer parameter;
   stan::callbacks::json_writer<std::stringstream, stan::test::deleter_noop>
       diagnostics;
   stan::json::json_data context;
@@ -92,7 +85,7 @@ TEST_F(ServicesPathfinderGLM, single) {
   stan::test::mock_callback callback;
   stan::io::empty_var_context empty_context;  // = init_init_context();
   std::ofstream empty_ostream(nullptr);
-  stan::test::loggy logger(empty_ostream);
+  stan::test::test_logger logger(empty_ostream);
 
   std::vector<std::tuple<Eigen::VectorXd, Eigen::VectorXd>> input_iters;
 
@@ -160,7 +153,7 @@ TEST_F(ServicesPathfinderGLM, multi) {
   constexpr int refresh = 0;
 
   std::ostream empty_ostream(nullptr);
-  stan::test::loggy logger(empty_ostream);
+  stan::test::test_logger logger(empty_ostream);
   std::vector<stan::callbacks::writer> single_path_parameter_writer(num_paths);
   std::vector<stan::callbacks::json_writer<std::stringstream>>
       single_path_diagnostic_writer(num_paths);
