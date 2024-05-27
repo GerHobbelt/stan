@@ -3,6 +3,7 @@
 
 #include <stan/callbacks/interrupt.hpp>
 #include <stan/callbacks/logger.hpp>
+#include <stan/callbacks/structured_writer.hpp>
 #include <stan/callbacks/writer.hpp>
 #include <stan/io/var_context.hpp>
 #include <stan/math/prim.hpp>
@@ -12,6 +13,7 @@
 #include <stan/services/util/initialize.hpp>
 #include <stan/services/util/inv_metric.hpp>
 #include <stan/services/util/run_adaptive_sampler.hpp>
+#include <iostream>
 #include <vector>
 
 namespace stan {
@@ -66,15 +68,17 @@ int hmc_static_dense_e_adapt(
   boost::ecuyer1988 rng = util::create_rng(random_seed, chain);
 
   std::vector<int> disc_vector;
-  std::vector<double> cont_vector = util::initialize(
-      model, init, rng, init_radius, true, logger, init_writer);
+  std::vector<double> cont_vector;
 
   Eigen::MatrixXd inv_metric;
   try {
+    cont_vector = util::initialize(model, init, rng, init_radius, true, logger,
+                                   init_writer);
     inv_metric = util::read_dense_inv_metric(init_inv_metric,
                                              model.num_params_r(), logger);
     util::validate_dense_inv_metric(inv_metric, logger);
-  } catch (const std::domain_error& e) {
+  } catch (const std::exception& e) {
+    logger.error(e.what());
     return error_codes::CONFIG;
   }
 
@@ -94,9 +98,11 @@ int hmc_static_dense_e_adapt(
   sampler.set_window_params(num_warmup, init_buffer, term_buffer, window,
                             logger);
 
-  util::run_adaptive_sampler(
-      sampler, model, cont_vector, num_warmup, num_samples, num_thin, refresh,
-      save_warmup, rng, interrupt, logger, sample_writer, diagnostic_writer);
+  callbacks::structured_writer dummy_metric_writer;
+  util::run_adaptive_sampler(sampler, model, cont_vector, num_warmup,
+                             num_samples, num_thin, refresh, save_warmup, rng,
+                             interrupt, logger, sample_writer,
+                             diagnostic_writer, dummy_metric_writer);
 
   return error_codes::OK;
 }
