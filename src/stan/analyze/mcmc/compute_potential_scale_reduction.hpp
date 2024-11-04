@@ -18,6 +18,8 @@ namespace stan {
 namespace analyze {
 
 /**
+ * DEPRECATED - re-implemented as function `rhat`.
+ *
  * Computes the potential scale reduction (Rhat) for the specified
  * parameter across all kept samples.
  *
@@ -32,8 +34,14 @@ namespace analyze {
  * @param sizes stores sizes of chains
  * @return potential scale reduction for the specified parameter
  */
-inline double compute_potential_scale_reduction(
-    std::vector<const double*> draws, std::vector<size_t> sizes) {
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((deprecated))
+#elif defined(_MSC_VER)
+__declspec(deprecated)
+#endif
+inline double
+compute_potential_scale_reduction(std::vector<const double*> draws,
+                                  std::vector<size_t> sizes) {
   int num_chains = sizes.size();
   size_t num_draws = sizes[0];
   if (num_draws == 0) {
@@ -102,6 +110,8 @@ inline double compute_potential_scale_reduction(
 }
 
 /**
+ * \deprecated use split_rank_normalized_rhat instead
+ *
  * Computes the potential scale reduction (Rhat) for the specified
  * parameter across all kept samples.
  *
@@ -117,14 +127,22 @@ inline double compute_potential_scale_reduction(
  * @param size stores sizes of chains
  * @return potential scale reduction for the specified parameter
  */
-inline double compute_potential_scale_reduction(
-    std::vector<const double*> draws, size_t size) {
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((deprecated))
+#elif defined(_MSC_VER)
+__declspec(deprecated)
+#endif
+inline double
+compute_potential_scale_reduction(std::vector<const double*> draws,
+                                  size_t size) {
   int num_chains = draws.size();
   std::vector<size_t> sizes(num_chains, size);
   return compute_potential_scale_reduction(draws, sizes);
 }
 
 /**
+ * \deprecated use split_rank_normalized_rhat instead
+ *
  * Computes the split potential scale reduction (Rhat) for the
  * specified parameter across all kept samples.  When the number of
  * total draws N is odd, the (N+1)/2th draw is ignored.
@@ -140,8 +158,14 @@ inline double compute_potential_scale_reduction(
  * @param sizes stores sizes of chains
  * @return potential scale reduction for the specified parameter
  */
-inline double compute_split_potential_scale_reduction(
-    std::vector<const double*> draws, std::vector<size_t> sizes) {
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((deprecated))
+#elif defined(_MSC_VER)
+__declspec(deprecated)
+#endif
+inline double
+compute_split_potential_scale_reduction(std::vector<const double*> draws,
+                                        std::vector<size_t> sizes) {
   int num_chains = sizes.size();
   size_t num_draws = sizes[0];
   for (int chain = 1; chain < num_chains; ++chain) {
@@ -157,6 +181,8 @@ inline double compute_split_potential_scale_reduction(
 }
 
 /**
+ * \deprecated use split_rank_normalized_rhat instead
+ *
  * Computes the split potential scale reduction (Rhat) for the
  * specified parameter across all kept samples.  When the number of
  * total draws N is odd, the (N+1)/2th draw is ignored.
@@ -173,8 +199,14 @@ inline double compute_split_potential_scale_reduction(
  * @param size stores sizes of chains
  * @return potential scale reduction for the specified parameter
  */
-inline double compute_split_potential_scale_reduction(
-    std::vector<const double*> draws, size_t size) {
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((deprecated))
+#elif defined(_MSC_VER)
+__declspec(deprecated)
+#endif
+inline double
+compute_split_potential_scale_reduction(std::vector<const double*> draws,
+                                        size_t size) {
   int num_chains = draws.size();
   std::vector<size_t> sizes(num_chains, size);
   return compute_split_potential_scale_reduction(draws, sizes);

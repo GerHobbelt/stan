@@ -24,38 +24,24 @@ class McmcChains : public testing::Test {
     bernoulli_warmup_stream.open(
         "src/test/unit/mcmc/test_csv_files/bernoulli_warmup.csv",
         std::ifstream::in);
-    bernoulli_zeta_stream.open(
-        "src/test/unit/mcmc/test_csv_files/bernoulli_zeta.csv",
-        std::ifstream::in);
     eight_schools_1_stream.open(
         "src/test/unit/mcmc/test_csv_files/eight_schools_1.csv",
         std::ifstream::in);
     eight_schools_2_stream.open(
         "src/test/unit/mcmc/test_csv_files/eight_schools_2.csv",
         std::ifstream::in);
-    eight_schools_5iters_1_stream.open(
-        "src/test/unit/mcmc/test_csv_files/eight_schools_5iters_1.csv",
-        std::ifstream::in);
-    eight_schools_5iters_2_stream.open(
-        "src/test/unit/mcmc/test_csv_files/eight_schools_5iters_2.csv",
-        std::ifstream::in);
 
     if (!bernoulli_500_stream || !bernoulli_default_stream
         || !bernoulli_thin_stream || !bernoulli_warmup_stream
-        || !bernoulli_zeta_stream || !eight_schools_1_stream
-        || !eight_schools_2_stream || !eight_schools_5iters_1_stream
-        || !eight_schools_5iters_2_stream) {
+        || !eight_schools_1_stream || !eight_schools_2_stream) {
       FAIL() << "Failed to open one or more test files";
     }
     bernoulli_500_stream.seekg(0, std::ios::beg);
     bernoulli_default_stream.seekg(0, std::ios::beg);
     bernoulli_thin_stream.seekg(0, std::ios::beg);
     bernoulli_warmup_stream.seekg(0, std::ios::beg);
-    bernoulli_zeta_stream.seekg(0, std::ios::beg);
     eight_schools_1_stream.seekg(0, std::ios::beg);
     eight_schools_2_stream.seekg(0, std::ios::beg);
-    eight_schools_5iters_1_stream.seekg(0, std::ios::beg);
-    eight_schools_5iters_2_stream.seekg(0, std::ios::beg);
 
     bernoulli_500
         = stan::io::stan_csv_reader::parse(bernoulli_500_stream, &out);
@@ -65,16 +51,10 @@ class McmcChains : public testing::Test {
         = stan::io::stan_csv_reader::parse(bernoulli_thin_stream, &out);
     bernoulli_warmup
         = stan::io::stan_csv_reader::parse(bernoulli_warmup_stream, &out);
-    bernoulli_zeta
-        = stan::io::stan_csv_reader::parse(bernoulli_zeta_stream, &out);
     eight_schools_1
         = stan::io::stan_csv_reader::parse(eight_schools_1_stream, &out);
     eight_schools_2
         = stan::io::stan_csv_reader::parse(eight_schools_2_stream, &out);
-    eight_schools_5iters_1
-        = stan::io::stan_csv_reader::parse(eight_schools_5iters_1_stream, &out);
-    eight_schools_5iters_2
-        = stan::io::stan_csv_reader::parse(eight_schools_5iters_2_stream, &out);
   }
 
   void TearDown() override {
@@ -82,23 +62,18 @@ class McmcChains : public testing::Test {
     bernoulli_default_stream.close();
     bernoulli_thin_stream.close();
     bernoulli_warmup_stream.close();
-    bernoulli_zeta_stream.close();
     eight_schools_1_stream.close();
     eight_schools_2_stream.close();
-    eight_schools_5iters_1_stream.close();
-    eight_schools_5iters_2_stream.close();
   }
 
   std::stringstream out;
 
   std::ifstream bernoulli_500_stream, bernoulli_default_stream,
-      bernoulli_thin_stream, bernoulli_warmup_stream, bernoulli_zeta_stream,
-      eight_schools_1_stream, eight_schools_2_stream,
-      eight_schools_5iters_1_stream, eight_schools_5iters_2_stream;
+      bernoulli_thin_stream, bernoulli_warmup_stream, eight_schools_1_stream,
+      eight_schools_2_stream;
 
   stan::io::stan_csv bernoulli_500, bernoulli_default, bernoulli_thin,
-      bernoulli_warmup, bernoulli_zeta, eight_schools_1, eight_schools_2,
-      eight_schools_5iters_1, eight_schools_5iters_2;
+      bernoulli_warmup, eight_schools_1, eight_schools_2;
 };
 
 TEST_F(McmcChains, constructor) {
@@ -138,11 +113,6 @@ TEST_F(McmcChains, addFail) {
   bad.clear();
   bad.push_back(bernoulli_default);
   bad.push_back(eight_schools_1);
-  EXPECT_THROW(stan::mcmc::chainset fail(bad), std::invalid_argument);
-
-  bad.clear();
-  bad.push_back(bernoulli_default);
-  bad.push_back(bernoulli_zeta);
   EXPECT_THROW(stan::mcmc::chainset fail(bad), std::invalid_argument);
 }
 
@@ -187,57 +157,53 @@ TEST_F(McmcChains, summary_stats) {
   }
   stan::mcmc::chainset bern_chains(bern_csvs);
   EXPECT_EQ(4, bern_chains.num_chains());
-  // mean
-  // median
-  // sd
-  // max abs deviation
-  // mcse_mean
-  // mcse_sd
-  // q1
-  // q5
-  // q95
-  // q99
-  // q0
-  // q100
-  // rhat
-  // rhat_basic
-  // ess_bulk, tail
-  // ess_basic
-  // autocovariance
-}
 
-TEST_F(McmcChains, mcse) {
-  std::vector<stan::io::stan_csv> eight_schools;
-  eight_schools.push_back(eight_schools_1);
-  eight_schools.push_back(eight_schools_2);
-  stan::mcmc::chainset chain_2(eight_schools);
-  EXPECT_EQ(2, chain_2.num_chains());
+  Eigen::MatrixXd theta = bern_chains.samples("theta");
+  // default summary statistics - via R pkg posterior
+  double theta_mean_expect = 0.251297;
+  EXPECT_NEAR(theta_mean_expect, bern_chains.mean("theta"), 1e-5);
 
-  // test against R implementation in pkg posterior
-  Eigen::VectorXd s8_mcse_mean(10), s8_mcse_sd(10);
-  s8_mcse_mean << 0.288379, 0.4741815, 0.2741001, 0.3294614, 0.2473758,
-      0.2665048, 0.2701363, 0.4740092, 0.3621771, 0.3832464;
-  s8_mcse_sd << 0.1841825, 0.2854258, 0.192332, 0.2919369, 0.2478025, 0.2207478,
-      0.2308452, 0.2522107, 0.2946896, 0.3184745;
+  double theta_median_expect = 0.237476;
+  EXPECT_NEAR(theta_median_expect, bern_chains.median("theta"), 1e-5);
 
-  for (size_t i = 0; i < 10; ++i) {
-    auto mcse_mean = chain_2.mcse_mean(i + 7);
-    auto mcse_sd = chain_2.mcse_sd(i + 7);
-    EXPECT_NEAR(mcse_mean, s8_mcse_mean(i), 0.05);
-    EXPECT_NEAR(mcse_sd, s8_mcse_sd(i), 0.09);
+  double theta_sd_expect = 0.121546;
+  EXPECT_NEAR(theta_sd_expect, bern_chains.sd("theta"), 1e-5);
+
+  double theta_mad_expect = 0.12309;
+  EXPECT_NEAR(theta_mad_expect, bern_chains.max_abs_deviation("theta"), 1e-5);
+
+  double theta_mcse_mean_expect = 0.003234;
+  EXPECT_NEAR(theta_mcse_mean_expect, bern_chains.mcse_mean("theta"), 1e-4);
+
+  double theta_mcse_sd_expect = 0.002164;
+  EXPECT_NEAR(theta_mcse_sd_expect, bern_chains.mcse_sd("theta"), 1e-4);
+
+  Eigen::VectorXd probs(6);
+  probs << 0.0, 0.01, 0.05, 0.95, 0.99, 1.0;
+  Eigen::VectorXd quantiles_expect(6);
+  quantiles_expect << 0.004072, 0.046281, 0.077169, 0.473885, 0.574524,
+      0.698401;
+  Eigen::VectorXd theta_quantiles = bern_chains.quantiles("theta", probs);
+  for (size_t i = 0; i < probs.size(); ++i) {
+    EXPECT_NEAR(quantiles_expect(i), theta_quantiles(i), 1e-5);
   }
-}
 
-TEST_F(McmcChains, autocorrelation) {
-  stan::mcmc::chainset chain_1(eight_schools_1);
-  EXPECT_EQ(1, chain_1.num_chains());
+  double theta_rhat_expect = 1.00679;
+  auto rhat = bern_chains.split_rank_normalized_rhat("theta");
+  EXPECT_NEAR(theta_rhat_expect, std::max(rhat.first, rhat.second), 1e-5);
 
-  Eigen::VectorXd mu_ac_posterior(10);
-  mu_ac_posterior << 1.00000000000, 0.19487668999, 0.05412049365, 0.07834048575,
-      0.04145609855, 0.04353962161, -0.00977255885, 0.00005175308,
-      0.01791577080, 0.01245035817;
-  auto mu_ac = chain_1.autocorrelation(0, "mu");
+  double theta_ess_bulk_expect = 1407.5124;
+  double theta_ess_tail_expect = 1291.7131;
+  auto ess = bern_chains.split_rank_normalized_ess("theta");
+  EXPECT_NEAR(theta_ess_bulk_expect, ess.first, 1e-4);
+  EXPECT_NEAR(theta_ess_tail_expect, ess.second, 1e-4);
+
+  // autocorrelation - first 10 lags
+  Eigen::VectorXd theta_ac_expect(10);
+  theta_ac_expect << 1.00000, 0.42204, 0.20683, 0.08383, 0.037326, 0.02507,
+      0.02003, 0.01347, 0.00476, 0.029495;
+  auto theta_ac = bern_chains.autocorrelation(0, "theta");
   for (size_t i = 0; i < 10; ++i) {
-    EXPECT_NEAR(mu_ac_posterior(i), mu_ac(i), 0.0005);
+    EXPECT_NEAR(theta_ac(i), theta_ac_expect(i), 0.0005);
   }
 }
