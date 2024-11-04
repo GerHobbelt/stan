@@ -6,7 +6,7 @@
 #include <string>
 #include <cmath>
 
-TEST(RankNormalizedEss, compute_split_rank_normalized_ess) {
+TEST(RankNormalizedEss, test_bulk_tail_basic_ess) {
   std::stringstream out;
   std::ifstream eight_schools_1_stream, eight_schools_2_stream;
   stan::io::stan_csv eight_schools_1, eight_schools_2;
@@ -29,6 +29,8 @@ TEST(RankNormalizedEss, compute_split_rank_normalized_ess) {
   ess_8_schools_bulk << 348, 370, 600, 638, 765, 608, 629, 274, 517, 112;
   Eigen::VectorXd ess_8_schools_tail(10);
   ess_8_schools_tail << 845, 858, 874, 726, 620, 753, 826, 628, 587, 108;
+  Eigen::VectorXd ess_8_schools_basic(10);
+  ess_8_schools_basic << 351, 403, 569, 646, 788, 602, 634, 262, 520, 223;
 
   Eigen::MatrixXd chains(eight_schools_1.samples.rows(), 2);
   for (size_t i = 0; i < 10; ++i) {
@@ -37,6 +39,8 @@ TEST(RankNormalizedEss, compute_split_rank_normalized_ess) {
     auto ess = stan::analyze::split_rank_normalized_ess(chains);
     EXPECT_NEAR(ess.first, ess_8_schools_bulk(i), 5);
     EXPECT_NEAR(ess.second, ess_8_schools_tail(i), 5);
+    auto ess_basic = stan::analyze::ess(chains);
+    EXPECT_NEAR(ess_basic, ess_8_schools_basic(i), 5);
   }
 }
 

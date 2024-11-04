@@ -103,7 +103,8 @@ double ess(const Eigen::MatrixXd& chains) {
 /**
  * Computes the split effective sample size (split ESS) using rank based
  * diagnostic for a set of per-chain draws. Based on paper
- * https://arxiv.org/abs/1903.08008
+ * https://arxiv.org/abs/1903.08008   Computes bulk ESS over entire sample,
+ * and tail ESS over the 0.05 and 0.95 quantiles.
  *
  * When the number of total draws N is odd, the last draw is ignored.
  *
@@ -111,7 +112,7 @@ double ess(const Eigen::MatrixXd& chains) {
  * Scale Reduction". http://mc-stan.org/users/documentation
 
  * @param chains matrix of per-chain draws, num_iters X chain
- * @return potential scale reduction
+ * @return pair ESS_bulk, ESS_tail
  */
 inline std::pair<double, double> split_rank_normalized_ess(
     const Eigen::MatrixXd& chains) {
