@@ -35,7 +35,7 @@ class unique_stream_writer final : public writer {
                                 const std::string& comment_prefix = "")
       : output_(std::move(output)), comment_prefix_(comment_prefix) {}
 
-  unique_stream_writer();
+  unique_stream_writer() = default;
   unique_stream_writer(unique_stream_writer& other) = delete;
   unique_stream_writer(unique_stream_writer&& other)
       : output_(std::move(other.output_)),
@@ -88,10 +88,40 @@ class unique_stream_writer final : public writer {
    * parameters in the rows and samples in the columns. The matrix is then
    * transposed for the output.
    */
-  void operator()(const Eigen::Ref<Eigen::Matrix<double, -1, -1>>& values) {
-    if (output_ == nullptr)
+  void operator()(const Eigen::Matrix<double, -1, -1>& values) {
+    if (output_ == nullptr) {
       return;
+    }
     *output_ << values.transpose().format(CommaInitFmt);
+  }
+  /**
+   * Write a row of values in csv format.
+   *
+   * Note: the precision of the output is determined by the settings
+   *  of the stream on construction.
+   *
+   * @param[in] values A column vector of values.
+   */
+  void operator()(const Eigen::Matrix<double, -1, 1>& values) {
+    if (output_ == nullptr) {
+      return;
+    }
+    *output_ << values.transpose().format(CommaInitFmt);
+  }
+
+  /**
+   * Write a row of values in csv format
+   *
+   * Note: the precision of the output is determined by the settings
+   *  of the stream on construction.
+   *
+   * @param[in] values A row vector of values.
+   */
+  void operator()(const Eigen::Matrix<double, 1, -1>& values) {
+    if (output_ == nullptr) {
+      return;
+    }
+    *output_ << values.format(CommaInitFmt);
   }
 
   /**
@@ -117,10 +147,8 @@ class unique_stream_writer final : public writer {
   /**
    * Checks if stream is valid.
    */
-  bool is_nonnull() const noexcept { return output_ != nullptr; }
-
-  const char* comment_prefix() const noexcept {
-    return comment_prefix_.c_str();
+  bool is_valid() const noexcept {
+    return output_ != nullptr && (*output_).good();
   }
 
  private:

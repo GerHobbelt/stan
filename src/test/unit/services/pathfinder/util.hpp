@@ -137,7 +137,7 @@ class test_logger : public stan::callbacks::logger {
 /**
  * Writer that stores results in memory.
  */
-class in_memory_writer : public stan::callbacks::stream_writer {
+class in_memory_writer : public stan::callbacks::writer {
  public:
   std::vector<std::string> names_;
   std::vector<std::string> times_;
@@ -146,8 +146,6 @@ class in_memory_writer : public stan::callbacks::stream_writer {
   tbb::concurrent_vector<std::tuple<Eigen::VectorXd, Eigen::VectorXd>>
       optim_path_;
   tbb::concurrent_vector<Eigen::MatrixXd> values_;
-  in_memory_writer(std::ostream& stream)
-      : stan::callbacks::stream_writer(stream) {}
 
   /**
    * Writes a set of names.
@@ -175,15 +173,16 @@ class in_memory_writer : public stan::callbacks::stream_writer {
   void operator()(const std::tuple<Eigen::VectorXd, Eigen::VectorXd>& xx) {
     optim_path_.push_back(xx);
   }
-  template <typename EigVec, stan::require_eigen_vector_t<EigVec>* = nullptr>
-  void operator()(EigVec&& vals) {
-    eigen_states_.push_back(std::forward<EigVec>(vals));
+  void operator()(const Eigen::Matrix<double, -1, 1>& vals) {
+    eigen_states_.push_back(vals);
   }
-  template <typename EigMat,
-            stan::require_eigen_matrix_dynamic_t<EigMat>* = nullptr>
-  void operator()(const EigMat& vals) {
+  void operator()(const Eigen::Matrix<double, 1, -1>& vals) {
+    eigen_states_.push_back(vals);
+  }
+  void operator()(const Eigen::Matrix<double, -1, -1>& vals) {
     values_.push_back(vals);
   }
+  inline bool is_valid() const noexcept { return true; }
   inline auto get_eigen_state_values() const {
     Eigen::MatrixXd param_vals(eigen_states_.size(), eigen_states_[0].size());
     for (size_t i = 0; i < eigen_states_.size(); ++i) {

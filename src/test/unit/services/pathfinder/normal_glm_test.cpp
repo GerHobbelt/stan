@@ -32,7 +32,7 @@ class ServicesPathfinderGLM : public testing::Test {
  public:
   ServicesPathfinderGLM()
       : init(init_ss),
-        parameter(parameter_ss),
+        parameter(),
         diagnostics(
             std::unique_ptr<std::stringstream, stan::test::deleter_noop>(
                 &diagnostic_ss)),
@@ -45,7 +45,7 @@ class ServicesPathfinderGLM : public testing::Test {
   }
   void TearDown() {}
 
-  std::stringstream init_ss, parameter_ss, diagnostic_ss, model_ss;
+  std::stringstream init_ss, diagnostic_ss, model_ss;
   stan::callbacks::stream_writer init;
   stan::test::in_memory_writer parameter;
   stan::callbacks::json_writer<std::stringstream, stan::test::deleter_noop>

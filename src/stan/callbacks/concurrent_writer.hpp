@@ -25,6 +25,8 @@ template <typename Writer>
 struct concurrent_writer {
   // A reference to the writer to write to
   std::reference_wrapper<Writer> writer;
+  // Number of null writes queued
+  std::atomic<int> null_writes_queued{0};
   // Queue for string messages
   tbb::concurrent_bounded_queue<std::string> str_messages_{};
   // Queue for vector of strings messages
@@ -50,7 +52,16 @@ struct concurrent_writer {
       Eigen::RowVectorXd eigen;
       while (continue_writing_
              || !(str_messages_.empty() && vec_str_messages_.empty()
-                  && eigen_messages_.empty())) {
+                  && eigen_messages_.empty() && null_writes_queued == 0)) {
+        while (null_writes_queued > 0) {
+          auto num_null_writes
+              = null_writes_queued.load(std::memory_order_relaxed);
+          for (int i = 0; i < num_null_writes; ++i) {
+            writer();
+          }
+          null_writes_queued.fetch_sub(num_null_writes,
+                                       std::memory_order_relaxed);
+        }
         while (str_messages_.try_pop(str)) {
           writer(str);
         }
@@ -79,20 +90,21 @@ struct concurrent_writer {
       }
     } else if constexpr (std::is_same_v<T, std::string>) {
       str_messages_.push(std::forward<T>(t));
-    } else if constexpr (stan::is_eigen_row_vector<T>::value
-                         || stan::is_eigen_col_vector<T>::value) {
+    } else if constexpr (stan::is_eigen_vector<T>::value) {
       eigen_messages_.push(std::forward<T>(t));
     } else {
-      static_assert(1,
-                    "Unsupported type passed to concurrent_writer. "
-                    "This is an internal error. Please file an issue on the "
-                    "stan github repo.");
+      static_assert(
+          0,
+          "Unsupported type passed to concurrent_writer. This is an "
+          "internal error. Please file an issue on the stan github "
+          "repository with the error log from the compiler.\n"
+          "https://github.com/stan-dev/stan/issues/new?template=Blank+issue");
     }
   }
   /**
    * Writes a comment prefix to the writer.
    */
-  void operator()() { str_messages_.push(writer.get().comment_prefix()); }
+  void operator()() { null_writes_queued++; }
   /**
    * Waits till all writes are finished on the thread
    */

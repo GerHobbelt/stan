@@ -1,10 +1,12 @@
 #include <stan/callbacks/json_writer.hpp>
 #include <stan/callbacks/stream_writer.hpp>
+#include <stan/callbacks/unique_stream_writer.hpp>
 #include <stan/callbacks/json_writer.hpp>
 #include <stan/math.hpp>
 #include <stan/io/array_var_context.hpp>
 #include <stan/io/empty_var_context.hpp>
 #include <stan/io/json/json_data.hpp>
+#include <stan/io/stan_csv_reader.hpp>
 #include <stan/services/pathfinder/multi.hpp>
 #include <test/test-models/good/services/eight_schools.hpp>
 #include <test/unit/services/instrumented_callbacks.hpp>
@@ -37,7 +39,6 @@ class ServicesPathfinderEightSchools : public testing::Test {
  public:
   ServicesPathfinderEightSchools()
       : init(init_ss),
-        parameter(parameter_ss),
         diagnostics(
             std::unique_ptr<std::stringstream, stan::test::deleter_noop>(
                 &diagnostic_ss)),
@@ -49,13 +50,30 @@ class ServicesPathfinderEightSchools : public testing::Test {
     diagnostic_ss.clear();
   }
 
-  std::stringstream init_ss, parameter_ss, diagnostic_ss, model_ss;
+  std::stringstream init_ss, diagnostic_ss, model_ss;
   stan::callbacks::stream_writer init;
   stan::test::in_memory_writer parameter;
   stan::callbacks::json_writer<std::stringstream, stan::test::deleter_noop>
       diagnostics;
   stan::io::array_var_context context;
   stan_model model;
+  static constexpr unsigned int seed = 0;
+  static constexpr unsigned int stride_id = 1;
+  static constexpr double init_radius = 1;
+  static constexpr size_t num_multi_draws = 12000;
+  static constexpr size_t num_paths = 16;
+  static constexpr double num_elbo_draws = 1000;
+  static constexpr double num_draws = 10000;
+  static constexpr int history_size = 10;
+  static constexpr double init_alpha = 1;
+  static constexpr double tol_obj = 1e-12;
+  static constexpr double tol_rel_obj = 1000000;
+  static constexpr double tol_grad = 1e-12;
+  static constexpr double tol_rel_grad = 10000000;
+  static constexpr double tol_param = 1e-12;
+  static constexpr int num_iterations = 2000;
+  static constexpr int refresh = 1;
+  static constexpr bool save_iterations = false;
 };
 
 constexpr std::array param_indices{0,  1,  3,  4,  5,  6,  7,  8,  9,  10,
@@ -64,24 +82,7 @@ constexpr std::array param_indices{0,  1,  3,  4,  5,  6,  7,  8,  9,  10,
 auto init_init_context() { return stan::io::empty_var_context(); }
 
 TEST_F(ServicesPathfinderEightSchools, multi) {
-  constexpr unsigned int seed = 0;
-  constexpr unsigned int stride_id = 1;
-  constexpr double init_radius = 1;
-  constexpr size_t num_multi_draws = 10000;
-  constexpr size_t num_paths = 16;
-  constexpr double num_elbo_draws = 1000;
-  constexpr double num_draws = 10000;
-  constexpr int history_size = 10;
-  constexpr double init_alpha = 1;
-  constexpr double tol_obj = 1e-12;
-  constexpr double tol_rel_obj = 1000000;
-  constexpr double tol_grad = 1e-12;
-  constexpr double tol_rel_grad = 10000000;
-  constexpr double tol_param = 1e-12;
-  constexpr int num_iterations = 2000;
   // bool save_iterations = true;
-  constexpr int refresh = 1;
-  constexpr bool save_iterations = false;
   constexpr bool calculate_lp = true;
   constexpr bool resample = true;
   std::unique_ptr<std::ostream> empty_ostream(nullptr);
@@ -105,15 +106,40 @@ TEST_F(ServicesPathfinderEightSchools, multi) {
       single_path_parameter_writer, single_path_diagnostic_writer, parameter,
       diagnostics, calculate_lp, resample);
 
-  Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, 0, ", ", ", ", "\n", "",
-                               "", "");
   Eigen::MatrixXd param_vals = parameter.get_eigen_state_values();
   EXPECT_EQ(param_vals.cols(), 21);
-  EXPECT_EQ(param_vals.rows(), 10000);
-  // They can be in any order and any number
+  EXPECT_EQ(param_vals.rows(), num_multi_draws);
   for (Eigen::Index i = 0; i < num_multi_draws; i++) {
     EXPECT_GE(param_vals.col(2)(i), 0);
     EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+  }
+
+  stan::test::in_memory_writer parameter2;
+  // Check we get the same result running multiple times
+  int return_code2 = stan::services::pathfinder::pathfinder_lbfgs_multi(
+      model, single_path_inits, seed, stride_id, init_radius, history_size,
+      init_alpha, tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param,
+      num_iterations, num_elbo_draws, num_draws, num_multi_draws, num_paths,
+      save_iterations, refresh, callback, logger,
+      std::vector<stan::callbacks::stream_writer>(num_paths, init),
+      single_path_parameter_writer, single_path_diagnostic_writer, parameter2,
+      diagnostics, calculate_lp, resample);
+
+  Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, 0, ", ", ", ", "\n", "",
+                               "", "");
+  Eigen::MatrixXd param_vals2 = parameter2.get_eigen_state_values();
+  for (int j = 0; j < 21; ++j) {
+    Eigen::VectorXd param_vals_col = param_vals.col(j);
+    Eigen::VectorXd param_vals2_col = param_vals2.col(j);
+    std::sort(param_vals_col.data(),
+              param_vals_col.data() + param_vals_col.size());
+    std::sort(param_vals2_col.data(),
+              param_vals2_col.data() + param_vals2_col.size());
+    for (Eigen::Index i = 0; i < num_multi_draws; i++) {
+      EXPECT_EQ(param_vals_col(i), param_vals2_col(i))
+          << "param_vals(" << i << "," << j << "): " << param_vals_col(i)
+          << " != " << param_vals2_col(i);
+    }
   }
   auto param_tmp = param_vals(Eigen::all, param_indices);
   auto mean_sd_pair = stan::test::get_mean_sd(param_tmp);
@@ -144,22 +170,239 @@ TEST_F(ServicesPathfinderEightSchools, multi) {
   }
 }
 
+TEST_F(ServicesPathfinderEightSchools, multi_psis_only_output) {
+  constexpr bool calculate_lp = true;
+  constexpr bool resample = true;
+  std::unique_ptr<std::ostream> empty_ostream(nullptr);
+  stan::test::test_logger logger(std::move(empty_ostream));
+  using stream_writer = stan::callbacks::unique_stream_writer<std::ofstream>;
+  using string_writer
+      = stan::callbacks::unique_stream_writer<std::stringstream>;
+  std::vector<stream_writer> single_path_parameter_writer(num_paths);
+  string_writer parameter_writer{std::make_unique<std::stringstream>(), "# "};
+  std::vector<stan::callbacks::json_writer<std::stringstream>>
+      single_path_diagnostic_writer(num_paths);
+  std::vector<std::unique_ptr<decltype(init_init_context())>> single_path_inits;
+  for (int i = 0; i < num_paths; ++i) {
+    single_path_inits.emplace_back(
+        std::make_unique<decltype(init_init_context())>(init_init_context()));
+  }
+  stan::test::mock_callback callback;
+  int return_code = stan::services::pathfinder::pathfinder_lbfgs_multi(
+      model, single_path_inits, seed, stride_id, init_radius, history_size,
+      init_alpha, tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param,
+      num_iterations, num_elbo_draws, num_draws, num_multi_draws, num_paths,
+      save_iterations, refresh, callback, logger,
+      std::vector<stan::callbacks::stream_writer>(num_paths, init),
+      single_path_parameter_writer, single_path_diagnostic_writer,
+      parameter_writer, diagnostics, calculate_lp, resample);
+
+  auto str = parameter_writer.get_stream().str();
+  {
+    auto&& streamer = parameter_writer.get_stream();
+    std::stringstream tmp_stream;
+    auto stan_data = stan::io::stan_csv_reader::parse(streamer, &tmp_stream);
+    EXPECT_FALSE(str.rfind("Elapsed Time:") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Pathfinders)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(PSIS)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Total)") == std::string::npos);
+    EXPECT_EQ(stan_data.samples.rows(), num_multi_draws);
+    EXPECT_EQ(stan_data.samples.cols(), 21);
+  }
+}
+
+TEST_F(ServicesPathfinderEightSchools, multi_and_single_psis_output) {
+  constexpr bool calculate_lp = true;
+  constexpr bool resample = true;
+  std::unique_ptr<std::ostream> empty_ostream(nullptr);
+  stan::test::test_logger logger(std::move(empty_ostream));
+  using unique_string_writer
+      = stan::callbacks::unique_stream_writer<std::stringstream>;
+  std::vector<unique_string_writer> single_path_parameter_writer;
+  unique_string_writer parameter_writer{std::make_unique<std::stringstream>(),
+                                        "# "};
+  for (int i = 0; i < num_paths; ++i) {
+    single_path_parameter_writer.emplace_back(
+        std::make_unique<std::stringstream>(), "# ");
+  }
+  std::vector<stan::callbacks::json_writer<std::stringstream>>
+      single_path_diagnostic_writer(num_paths);
+  std::vector<std::unique_ptr<decltype(init_init_context())>> single_path_inits;
+  for (int i = 0; i < num_paths; ++i) {
+    single_path_inits.emplace_back(
+        std::make_unique<decltype(init_init_context())>(init_init_context()));
+  }
+  stan::test::mock_callback callback;
+  int return_code = stan::services::pathfinder::pathfinder_lbfgs_multi(
+      model, single_path_inits, seed, stride_id, init_radius, history_size,
+      init_alpha, tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param,
+      num_iterations, num_elbo_draws, num_draws, num_multi_draws, num_paths,
+      save_iterations, refresh, callback, logger,
+      std::vector<stan::callbacks::stream_writer>(num_paths, init),
+      single_path_parameter_writer, single_path_diagnostic_writer,
+      parameter_writer, diagnostics, calculate_lp, resample);
+
+  {
+    auto&& streamer = parameter_writer.get_stream();
+    std::stringstream tmp_stream;
+    auto stan_data = stan::io::stan_csv_reader::parse(streamer, &tmp_stream);
+    auto str = streamer.str();
+    EXPECT_FALSE(str.rfind("Elapsed Time:") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Pathfinders)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(PSIS)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Total)") == std::string::npos);
+    EXPECT_EQ(stan_data.samples.rows(), num_multi_draws);
+    EXPECT_EQ(stan_data.samples.cols(), 21);
+  }
+  int sentinal = 0;
+  for (auto&& single_param : single_path_parameter_writer) {
+    auto&& streamer = single_param.get_stream();
+    auto str = streamer.str();
+    std::stringstream tmp_stream;
+    auto stan_data = stan::io::stan_csv_reader::parse(streamer, &tmp_stream);
+    EXPECT_FALSE(str.rfind("Elapsed Time:") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Pathfinder)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Total)") == std::string::npos);
+    EXPECT_EQ(stan_data.samples.rows(), num_draws);
+    EXPECT_EQ(stan_data.samples.cols(), 21);
+    EXPECT_TRUE((stan_data.samples.col(2).array() == sentinal).all());
+    sentinal++;
+  }
+}
+
+TEST_F(ServicesPathfinderEightSchools, multi_nopsis_only_output) {
+  constexpr bool calculate_lp = false;
+  constexpr bool resample = false;
+  std::unique_ptr<std::ostream> empty_ostream(nullptr);
+  stan::test::test_logger logger(std::move(empty_ostream));
+  using stream_writer = stan::callbacks::unique_stream_writer<std::ofstream>;
+  using string_writer
+      = stan::callbacks::unique_stream_writer<std::stringstream>;
+  std::vector<stream_writer> single_path_parameter_writer(num_paths);
+  string_writer parameter_writer{std::make_unique<std::stringstream>(), "# "};
+  std::vector<stan::callbacks::json_writer<std::stringstream>>
+      single_path_diagnostic_writer(num_paths);
+  std::vector<std::unique_ptr<decltype(init_init_context())>> single_path_inits;
+  for (int i = 0; i < num_paths; ++i) {
+    single_path_inits.emplace_back(
+        std::make_unique<decltype(init_init_context())>(init_init_context()));
+  }
+  stan::test::mock_callback callback;
+  int return_code = stan::services::pathfinder::pathfinder_lbfgs_multi(
+      model, single_path_inits, seed, stride_id, init_radius, history_size,
+      init_alpha, tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param,
+      num_iterations, num_elbo_draws, num_draws, num_multi_draws, num_paths,
+      save_iterations, refresh, callback, logger,
+      std::vector<stan::callbacks::stream_writer>(num_paths, init),
+      single_path_parameter_writer, single_path_diagnostic_writer,
+      parameter_writer, diagnostics, calculate_lp, resample);
+  auto str = parameter_writer.get_stream().str();
+  {
+    auto&& streamer = parameter_writer.get_stream();
+    std::stringstream tmp_stream;
+    auto stan_data = stan::io::stan_csv_reader::parse(streamer, &tmp_stream);
+    EXPECT_FALSE(str.rfind("Elapsed Time:") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Pathfinders)") == std::string::npos);
+    EXPECT_TRUE(str.rfind("(PSIS)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Total)") == std::string::npos);
+    EXPECT_EQ(stan_data.samples.rows(), num_draws * num_paths);
+    EXPECT_EQ(stan_data.samples.cols(), 21);
+  }
+}
+
+TEST_F(ServicesPathfinderEightSchools, multi_and_single_nopsis_output) {
+  constexpr bool calculate_lp = false;
+  constexpr bool resample = false;
+  std::unique_ptr<std::ostream> empty_ostream(nullptr);
+  stan::test::test_logger logger(std::move(empty_ostream));
+  using unique_string_writer
+      = stan::callbacks::unique_stream_writer<std::stringstream>;
+  std::vector<unique_string_writer> single_path_parameter_writer;
+  unique_string_writer parameter_writer{std::make_unique<std::stringstream>(),
+                                        "# "};
+  for (int i = 0; i < num_paths; ++i) {
+    single_path_parameter_writer.emplace_back(
+        std::make_unique<std::stringstream>(), "# ");
+  }
+  std::vector<stan::callbacks::json_writer<std::stringstream>>
+      single_path_diagnostic_writer(num_paths);
+  std::vector<std::unique_ptr<decltype(init_init_context())>> single_path_inits;
+  for (int i = 0; i < num_paths; ++i) {
+    single_path_inits.emplace_back(
+        std::make_unique<decltype(init_init_context())>(init_init_context()));
+  }
+  stan::test::mock_callback callback;
+  int return_code = stan::services::pathfinder::pathfinder_lbfgs_multi(
+      model, single_path_inits, seed, stride_id, init_radius, history_size,
+      init_alpha, tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param,
+      num_iterations, num_elbo_draws, num_draws, num_multi_draws, num_paths,
+      save_iterations, refresh, callback, logger,
+      std::vector<stan::callbacks::stream_writer>(num_paths, init),
+      single_path_parameter_writer, single_path_diagnostic_writer,
+      parameter_writer, diagnostics, calculate_lp, resample);
+
+  {
+    auto str = parameter_writer.get_stream().str();
+    auto&& streamer = parameter_writer.get_stream();
+    std::stringstream tmp_stream;
+    std::ofstream file("../../multi_path.csv");
+    file << str;
+    auto stan_data = stan::io::stan_csv_reader::parse(streamer, &tmp_stream);
+    EXPECT_FALSE(str.rfind("Elapsed Time:") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Pathfinders)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Total)") == std::string::npos);
+    EXPECT_TRUE(str.rfind("(PSIS)") == std::string::npos);
+    EXPECT_EQ(stan_data.samples.rows(), num_draws * num_paths);
+    EXPECT_EQ(stan_data.samples.cols(), 21);
+  }
+  int sentinal = 0;
+  for (auto&& single_param : single_path_parameter_writer) {
+    auto&& streamer = single_param.get_stream();
+    auto&& str = streamer.str();
+    std::ofstream file("../../single_path_" + std::to_string(sentinal)
+                       + ".csv");
+    file << str;
+    std::stringstream tmp_stream;
+    auto stan_data = stan::io::stan_csv_reader::parse(streamer, &tmp_stream);
+    EXPECT_FALSE(str.rfind("Elapsed Time:") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Pathfinder)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Total)") == std::string::npos);
+    EXPECT_TRUE(str.find("(PSIS)") == std::string::npos);
+    EXPECT_EQ(stan_data.samples.rows(), num_draws);
+    EXPECT_EQ(stan_data.samples.cols(), 21);
+    EXPECT_TRUE((stan_data.samples.col(2).array() == sentinal).all());
+    sentinal++;
+  }
+}
+
+TEST_F(ServicesPathfinderEightSchools, single_output) {
+  std::unique_ptr<std::ostream> empty_ostream(nullptr);
+  stan::test::test_logger logger(std::move(empty_ostream));
+  stan::test::mock_callback callback;
+  using unique_string_writer
+      = stan::callbacks::unique_stream_writer<std::stringstream>;
+  unique_string_writer parameter_writer{std::make_unique<std::stringstream>(),
+                                        "# "};
+  int return_code = stan::services::pathfinder::pathfinder_lbfgs_single(
+      model, context, seed, stride_id, init_radius, history_size, init_alpha,
+      tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param, num_iterations,
+      num_elbo_draws, num_draws, save_iterations, refresh, callback, logger,
+      init, parameter_writer, diagnostics);
+  auto str = parameter_writer.get_stream().str();
+  {
+    auto&& streamer = parameter_writer.get_stream();
+    std::stringstream tmp_stream;
+    auto stan_data = stan::io::stan_csv_reader::parse(streamer, &tmp_stream);
+    EXPECT_FALSE(str.rfind("Elapsed Time:") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Pathfinder)") == std::string::npos);
+    EXPECT_TRUE(str.rfind("(PSIS)") == std::string::npos);
+    EXPECT_FALSE(str.rfind("(Total)") == std::string::npos);
+    EXPECT_EQ(stan_data.samples.rows(), num_draws);
+    EXPECT_EQ(stan_data.samples.cols(), 21);
+  }
+}
+
 TEST_F(ServicesPathfinderEightSchools, single) {
-  constexpr unsigned int seed = 0;
-  constexpr unsigned int stride_id = 1;
-  constexpr double init_radius = 1;
-  constexpr double num_elbo_draws = 80;
-  constexpr double num_draws = 1000;
-  constexpr int history_size = 10;
-  constexpr double init_alpha = 1;
-  constexpr double tol_obj = 1e-12;
-  constexpr double tol_rel_obj = 1000000;
-  constexpr double tol_grad = 1e-12;
-  constexpr double tol_rel_grad = 10000000;
-  constexpr double tol_param = 1e-12;
-  constexpr int num_iterations = 2000;
-  constexpr bool save_iterations = false;
-  constexpr int refresh = 0;
   std::unique_ptr<std::ostream> empty_ostream(nullptr);
   stan::test::test_logger logger(std::move(empty_ostream));
   stan::test::mock_callback callback;
@@ -262,11 +505,11 @@ TEST_F(ServicesPathfinderEightSchools, single) {
   all_sd_vals.row(2) = sd_vals - sd_r_vals;
 
   // Single pathfinder can do very badly for eight schools
-  for (Eigen::Index i = 0; i < all_mean_vals.cols(); i++) {
-    EXPECT_NEAR(0, all_mean_vals(2, i), 100);
+  for (Eigen::Index i = 2; i < all_mean_vals.cols(); i++) {
+    EXPECT_NEAR(0, all_mean_vals(2, i), 3);
   }
 
-  for (Eigen::Index i = 0; i < all_sd_vals.cols(); i++) {
-    EXPECT_NEAR(0, all_sd_vals(2, i), 100);
+  for (Eigen::Index i = 2; i < all_sd_vals.cols(); i++) {
+    EXPECT_NEAR(0, all_sd_vals(2, i), 6);
   }
 }
