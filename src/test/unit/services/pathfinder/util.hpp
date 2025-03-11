@@ -146,7 +146,14 @@ class in_memory_writer : public stan::callbacks::writer {
   tbb::concurrent_vector<std::tuple<Eigen::VectorXd, Eigen::VectorXd>>
       optim_path_;
   tbb::concurrent_vector<Eigen::MatrixXd> values_;
-
+  void clear() {
+    names_.clear();
+    times_.clear();
+    states_.clear();
+    eigen_states_.clear();
+    optim_path_.clear();
+    values_.clear();
+  }
   /**
    * Writes a set of names.
    *

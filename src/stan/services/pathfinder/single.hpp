@@ -29,15 +29,18 @@ namespace internal {
  * Check the optimization direction is strictly positive and curvature is 'tame'
  * @tparam EigVec1 Type derived from `Eigen::DenseBase` with one column at
  * compile time
+ * @tparam EigVec2 Type derived from `Eigen::DenseBase` with one column at
+ * compile time
  * @param Yk Vector of gradients
  * @param Sk Vector of values
  * @return boolean with true if both the optimization direction `Dk` is greater
  * than zero and the curvature `thetak` is less than 1e12.
  */
-template <typename EigVec, stan::require_eigen_vector_t<EigVec>* = nullptr>
-inline bool check_curve(const EigVec& Yk, const EigVec& Sk) {
-  auto Dk = Yk.dot(Sk);
-  auto thetak = std::abs(Yk.array().square().sum() / Dk);
+template <typename EigVec1, typename EigVec2,
+          stan::require_all_eigen_vector_t<EigVec1, EigVec2>* = nullptr>
+inline bool check_curve(const EigVec1& Yk, const EigVec2& Sk) {
+  const auto Dk = Yk.dot(Sk);
+  const auto thetak = std::abs(Yk.array().square().sum() / Dk);
   return Dk > 0 && thetak <= 1e12;
 }
 
@@ -101,8 +104,6 @@ struct elbo_est_t {
  * approximation.
  * @tparam EigMat A type inheriting from `Eigen::DenseBase` with dynamic rows
  * and columns.
- * @tparam EigVec A type inheriting from `Eigen::DenseBase` with the compile
- * time number of columns equal to 1.
  * @param u A matrix of gaussian IID samples with rows equal to the size of the
  * number of samples to be made and columns equal to the number of parameters.
  * @param taylor_approx Approximation from `taylor_approximation`.
@@ -135,19 +136,13 @@ inline Eigen::MatrixXd approximate_samples(
  * approximation.
  * @tparam EigVec1 A type inheriting from `Eigen::DenseBase` with the compile
  * time number of columns equal to 1.
- * @tparam EigVec2 A type inheriting from `Eigen::DenseBase` with the compile
- * time number of columns equal to 1.
- * @param u A matrix of gaussian IID samples with columns equal to the size of
- * the number of samples to be made and rows equal to the number of parameters.
+ * @param u A vector of gaussian IID samples with columns equal to 1 and rows
+ * equal to the number of parameters.
  * @param taylor_approx Approximation from `taylor_approximation`.
- * @return A matrix with columns equal to the number of samples and rows equal
- * to the number of parameters. Each column represents an approximate draw for
- * the set of parameters.
  * @return A vector of an approximated sample derived from the taylor
  * approximation.
  */
-template <typename EigVec1, typename EigVec2,
-          require_eigen_vector_t<EigVec1>* = nullptr>
+template <typename EigVec1, require_eigen_vector_t<EigVec1>* = nullptr>
 inline Eigen::VectorXd approximate_samples(
     EigVec1&& u, const taylor_approx_t& taylor_approx) {
   if (taylor_approx.use_full) {
@@ -195,14 +190,11 @@ generate_matrix(Generator&& variate_generator, const Eigen::Index num_params,
  * @tparam ReturnElbo If true, calculate ELBO and return it in `elbo_est_t`. If
  * `false` ELBO is set in the return as `-Infinity`
  * @tparam LPF Type of log probability functor
- * @tparam ConstrainF Type of functor for constraining parameters
  * @tparam RNG Type of random number generator
  * @tparam EigVec Type inheriting from `Eigen::DenseBase` with 1 column at
  * compile time.
  * @tparam Logger Type of logger callback
  * @param lp_fun Functor to calculate the log density
- * @param constrain_fun A functor to transform parameters to the constrained
- * space
  * @param[in,out] rng A generator to produce standard gaussian random variables
  * @param taylor_approx The taylor approximation at this iteration of LBFGS
  * @param num_samples Number of approximate samples to generate
@@ -424,7 +416,7 @@ inline taylor_approx_t taylor_approximation_sparse(
  * @param alpha The diagonal of the approximate hessian
  * @param Dk vector of Columnwise products of parameter and gradients with size
  * equal to history size
- * @param ninvRST
+ * @param ninvRST The solution of X = R^-1 * S
  * @param point_est The parameters for the given iteration of LBFGS
  * @param grad_est The gradients for the given iteration of LBFGS
  * @return The components of either the sparse or dense taylor approximation
@@ -451,7 +443,6 @@ inline taylor_approx_t taylor_approximation(
  * Construct the return for directly calling single pathfinder or
  * calling single pathfinder from multi pathfinder.
  * @tparam ReturnLpSamples Dictates what is returned from pathfinder.
- * @tparam EigMat A type inheriting from `Eigen::DenseBase`
  * @tparam EigVec A type inheriting from `Eigen::DenseBase` with one column
  * defined at compile time
  * @return If `ReturnLpSamples` is `true`, returns a pair with the return code
@@ -470,23 +461,18 @@ inline auto ret_pathfinder(int return_code, EigVec&& elbo_est) noexcept {
  * Estimate the approximate draws given the taylor approximation.
  * @tparam RNG Type of random number generator
  * @tparam LPFun Type of log probability functor
- * @tparam ConstrainFun Type of functor for constraining parameters
- * @tparam Logger Type inheriting from `stan::callbacks::logger`
  * @tparam AlphaVec Type inheriting from `Eigen::DenseBase` with 1 column at
  * compile time
- * @tparam GradBuffer Boost circular buffer with inner Eigen vector type
  * @tparam CurrentParams Type inheriting from `Eigen::DenseBase` with 1 column
  * at compile time
  * @tparam CurentGrads Type inheriting from `Eigen::DenseBase` with 1 column at
  * compile time
  * @tparam ParamMat Type inheriting from `Eigen::DenseBase` with dynamic rows
  * and columns at compile time.
- * @tparam Logger Type of logger callback
+ * @tparam Logger Type inheriting from `stan::callbacks::logger`
  * @param[in,out] rng A generator to produce standard gaussian random variables
- * @param alpha The approximation of the diagonal hessian
  * @param lp_fun Functor to calculate the log density
- * @param constrain_fun A functor to transform parameters to the constrained
- * space
+ * @param alpha The approximation of the diagonal hessian
  * @param current_params Parameters from iteration of LBFGS
  * @param current_grads Gradients from iteration of LBFGS
  * @param Ykt_mat Matrix of the last `history_size` changes in the gradient.
@@ -532,12 +518,13 @@ auto pathfinder_impl(RNG&& rng, LPFun&& lp_fun, AlphaVec&& alpha,
 /**
  * Write time lines for a pathfinder output file
  * @tparam MultiPathfinder If true, output uses (Pathfinders) else (Pathfinder)
+ * @tparam PSISTime If true, output includes PSIS time
  * @tparam ParamWriter Type inheriting from `stan::callbacks::writer`
  * @param[in,out] parameter_writer A callback writer for messages
  * @param pathfinders_delta_time Time taken for pathfinders
  * @param psis_delta_time Time taken for PSIS
  */
-template <bool MultiPathfinder, typename ParamWriter>
+template <bool MultiPathfinder, bool PSISTime, typename ParamWriter>
 inline void write_times(ParamWriter&& parameter_writer,
                         double pathfinders_delta_time, double psis_delta_time) {
   parameter_writer();
@@ -547,7 +534,7 @@ inline void write_times(ParamWriter&& parameter_writer,
         + std::string(" seconds")
         + (MultiPathfinder ? " (Pathfinders)" : " (Pathfinder)");
   parameter_writer(optim_time_str);
-  if (psis_delta_time != 0) {
+  if constexpr (PSISTime) {
     std::string psis_time_str = std::string(time_header.size(), ' ')
                                 + std::to_string(psis_delta_time)
                                 + " seconds (PSIS)";
@@ -566,8 +553,8 @@ inline void write_times(ParamWriter&& parameter_writer,
 /**
  * Run single path pathfinder with specified initializations and write results
  * to the specified callbacks and it returns a return code.
- * @tparam ReturnLpSamples if `true` single pathfinder returns the lp_ratio
- * vector and approximate samples. If `false` only gives a return code.
+ * @tparam ReturnLpSamples if `true` single pathfinder returns the error code
+ * and the elbo from the best pathfinder. If `false` only gives a return code.
  * @tparam InMultiPathfinder if `true` the pathfinder is called from the multi
  * pathfinder. If `false` the pathfinder is called directly.
  * @tparam Model type of model
@@ -632,8 +619,7 @@ inline auto pathfinder_lbfgs_single(
     int num_elbo_draws, int num_draws, bool save_iterations, int refresh,
     callbacks::interrupt& interrupt, callbacks::logger& logger,
     callbacks::writer& init_writer, ParamWriter& parameter_writer,
-    DiagnosticWriter& diagnostic_writer, bool calculate_lp = true,
-    bool psis_resample = false) {
+    DiagnosticWriter& diagnostic_writer, bool calculate_lp = true) {
   const auto start_pathfinder_time = std::chrono::steady_clock::now();
   stan::rng_t rng = util::create_rng(random_seed, stride_id);
   std::vector<int> disc_vector;
@@ -802,8 +788,8 @@ inline auto pathfinder_lbfgs_single(
           num_elbo_draws, iter_msg, logger);
       num_evals += pathfinder_res.first.fn_calls;
       print_log_remainder(write_log_cond, msg, ret, num_evals, lbfgs,
-                          pathfinder_res.first.elbo, pathfinder_res.first.elbo,
-                          lbfgs_ss, logger);
+                          pathfinder_res.first.elbo, elbo_best.elbo, lbfgs_ss,
+                          logger);
       if (unlikely(save_iterations)) {
         diagnostic_writer.write("lbfgs_success", true);
         diagnostic_writer.write("pathfinder_success", true);
@@ -822,7 +808,8 @@ inline auto pathfinder_lbfgs_single(
         lbfgs_ss.str("");
       }
 
-      if (pathfinder_res.first.elbo > elbo_best.elbo) {
+      if (!std::isinf(pathfinder_res.first.elbo)
+          && pathfinder_res.first.elbo > elbo_best.elbo) {
         elbo_best = std::move(pathfinder_res.first);
         taylor_approx_best = std::move(pathfinder_res.second);
         best_iteration = lbfgs.iter_num();
@@ -893,15 +880,14 @@ inline auto pathfinder_lbfgs_single(
     std::vector<std::string> names;
     names.push_back("lp_approx__");
     names.push_back("lp__");
-    names.push_back("pathfinder__");
+    names.push_back("path__");
     model.constrained_param_names(names, true, true);
     if constexpr (InMultiPathfinder) {
       static_assert(stan::callbacks::is_tee_writer_v<ParamWriter>,
                     "ReturnLpSamples is false but the parameter_writer is not "
                     "a tee_writer! "
                     "Multi pathfinder assumes we use a tee writer here, if you "
-                    "intend to change this "
-                    "please make it clear why.");
+                    "intend to change this please make it clear why.");
       auto&& single_stream = std::get<0>(parameter_writer.get_stream());
       single_stream(names);
     } else {
@@ -909,7 +895,7 @@ inline auto pathfinder_lbfgs_single(
     }
     Eigen::Matrix<double, 1, Eigen::Dynamic> constrained_draws_vec(
         names.size());
-    constrained_draws_vec(2) = stride_id - ((stride_id == 0) ? 0 : 1);
+    constrained_draws_vec(2) = stride_id;
     Eigen::Array<double, Eigen::Dynamic, 1> lp_ratio;
     auto&& elbo_draws = elbo_best.repeat_draws;
     auto&& elbo_lp_ratio = elbo_best.lp_ratio;
@@ -999,11 +985,13 @@ inline auto pathfinder_lbfgs_single(
                     "intend to change this "
                     "please make it clear why.");
       auto&& single_stream = std::get<0>(parameter_writer.get_stream());
-      internal::write_times<false>(single_stream, pathfinder_delta_time, 0);
+      internal::write_times<false, false>(single_stream, pathfinder_delta_time,
+                                          0);
       return internal::ret_pathfinder<ReturnLpSamples>(error_codes::OK,
                                                        internal::elbo_est_t{});
     } else {
-      internal::write_times<false>(parameter_writer, pathfinder_delta_time, 0);
+      internal::write_times<false, false>(parameter_writer,
+                                          pathfinder_delta_time, 0);
       return internal::ret_pathfinder<ReturnLpSamples>(error_codes::OK,
                                                        internal::elbo_est_t{});
     }

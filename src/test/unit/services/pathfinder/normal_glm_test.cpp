@@ -98,7 +98,7 @@ TEST_F(ServicesPathfinderGLM, single) {
                                "", "");
   Eigen::MatrixXd param_vals = parameter.get_eigen_state_values();
   for (auto&& x_i : param_vals.col(2)) {
-    EXPECT_EQ(x_i, stride_id - 1);
+    EXPECT_EQ(x_i, stride_id);
   }
 
   auto param_tmp = param_vals(Eigen::all, param_indices);
@@ -164,7 +164,7 @@ TEST_F(ServicesPathfinderGLM, single_noreturnlp) {
   EXPECT_EQ(11, param_vals.cols());
   EXPECT_EQ(500, param_vals.rows());
   for (auto&& x_i : param_vals.col(2)) {
-    EXPECT_EQ(x_i, stride_id - 1);
+    EXPECT_EQ(x_i, stride_id);
   }
   for (Eigen::Index i = 0; i < num_elbo_draws; ++i) {
     EXPECT_FALSE(std::isnan(param_vals.coeff(num_draws + i, 1)))
@@ -238,7 +238,7 @@ TEST_F(ServicesPathfinderGLM, multi_null_unique) {
   // They can be in any order and any number
   for (Eigen::Index i = 0; i < num_multi_draws; i++) {
     EXPECT_GE(param_vals.col(2)(i), 0);
-    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+    EXPECT_LE(param_vals.col(2)(i), num_paths);
   }
   auto param_tmp = param_vals(Eigen::all, param_indices);
   auto mean_sd_pair = stan::test::get_mean_sd(param_tmp);
@@ -316,7 +316,7 @@ TEST_F(ServicesPathfinderGLM, multi) {
   // They can be in any order and any number
   for (Eigen::Index i = 0; i < num_multi_draws; i++) {
     EXPECT_GE(param_vals.col(2)(i), 0);
-    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+    EXPECT_LE(param_vals.col(2)(i), num_paths);
   }
   auto param_tmp = param_vals(Eigen::all, param_indices);
   auto mean_sd_pair = stan::test::get_mean_sd(param_tmp);
@@ -393,7 +393,7 @@ TEST_F(ServicesPathfinderGLM, multi_noresample) {
   EXPECT_EQ(8000, param_vals.rows());
   for (Eigen::Index i = 0; i < num_multi_draws; i++) {
     EXPECT_GE(param_vals.col(2)(i), 0);
-    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+    EXPECT_LE(param_vals.col(2)(i), num_paths);
   }
 }
 
@@ -447,7 +447,7 @@ TEST_F(ServicesPathfinderGLM, multi_noresample_noreturnlp) {
             8000);  // They can be in any order and any number
   for (Eigen::Index i = 0; i < num_multi_draws; i++) {
     EXPECT_GE(param_vals.col(2)(i), 0);
-    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+    EXPECT_LE(param_vals.col(2)(i), num_paths);
   }
 
   // Parallel means we don't know order
@@ -512,7 +512,7 @@ TEST_F(ServicesPathfinderGLM, multi_resample_noreturnlp) {
   // They can be in any order and any number
   for (Eigen::Index i = 0; i < num_paths * num_draws; i++) {
     EXPECT_GE(param_vals.col(2)(i), 0);
-    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+    EXPECT_LE(param_vals.col(2)(i), num_paths);
   }
   bool is_all_lp = true;
   bool is_any_lp = false;
@@ -572,7 +572,7 @@ TEST_F(ServicesPathfinderGLM, multi_noresample_returnlp) {
             8000);  // They can be in any order and any number
   for (Eigen::Index i = 0; i < num_paths * num_draws; i++) {
     EXPECT_GE(param_vals.col(2)(i), 0);
-    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+    EXPECT_LE(param_vals.col(2)(i), num_paths);
   }
   Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, 0, ", ", ", ", "\n", "",
                                "", "");

@@ -276,7 +276,7 @@ pipeline {
                     agent {
                         docker {
                             image 'stanorg/ci:gpu'
-                            label 'linux'
+                            label 'linux && gpu'
                             args '--pull always --gpus 1'
                         }
                     }
@@ -516,6 +516,7 @@ pipeline {
         success {
             script {
                 utils.updateUpstream(env,'cmdstan')
+                utils.updateUpstream(env,'rstan')
                 utils.mailBuildResults("SUCCESSFUL")
             }
         }
