@@ -174,7 +174,7 @@ TEST_F(ServicesPathfinderEightSchools, single) {
 
   Eigen::MatrixXd param_vals = parameter.get_eigen_state_values();
   for (auto&& x_i : param_vals.col(2)) {
-    EXPECT_EQ(x_i, stride_id);
+    EXPECT_EQ(x_i, stride_id - 1);
   }
   auto param_tmp = param_vals(Eigen::all, param_indices);
   auto mean_sd_pair = stan::test::get_mean_sd(param_tmp);

@@ -1,5 +1,6 @@
 #include <stdexcept>
 #include <stan/callbacks/json_writer.hpp>
+#include <stan/callbacks/unique_stream_writer.hpp>
 #include <stan/io/array_var_context.hpp>
 #include <stan/io/empty_var_context.hpp>
 #include <stan/io/json/json_data.hpp>
@@ -97,7 +98,7 @@ TEST_F(ServicesPathfinderGLM, single) {
                                "", "");
   Eigen::MatrixXd param_vals = parameter.get_eigen_state_values();
   for (auto&& x_i : param_vals.col(2)) {
-    EXPECT_EQ(x_i, stride_id);
+    EXPECT_EQ(x_i, stride_id - 1);
   }
 
   auto param_tmp = param_vals(Eigen::all, param_indices);
@@ -163,7 +164,7 @@ TEST_F(ServicesPathfinderGLM, single_noreturnlp) {
   EXPECT_EQ(11, param_vals.cols());
   EXPECT_EQ(500, param_vals.rows());
   for (auto&& x_i : param_vals.col(2)) {
-    EXPECT_EQ(x_i, stride_id);
+    EXPECT_EQ(x_i, stride_id - 1);
   }
   for (Eigen::Index i = 0; i < num_elbo_draws; ++i) {
     EXPECT_FALSE(std::isnan(param_vals.coeff(num_draws + i, 1)))
@@ -172,6 +173,96 @@ TEST_F(ServicesPathfinderGLM, single_noreturnlp) {
   for (Eigen::Index i = 0; i < (num_draws - num_elbo_draws); ++i) {
     EXPECT_TRUE(std::isnan(param_vals.coeff(num_elbo_draws + i, 1)))
         << "row: " << (num_draws + num_elbo_draws + i);
+  }
+}
+
+namespace stan::test {
+template <typename T>
+void init_null_writers(std::vector<T>& writers, size_t num_chains) {
+  writers.reserve(num_chains);
+  for (size_t i = 0; i < num_chains; ++i) {
+    writers.emplace_back(nullptr);
+  }
+}
+}  // namespace stan::test
+
+TEST_F(ServicesPathfinderGLM, multi_null_unique) {
+  constexpr unsigned int seed = 3;
+  constexpr unsigned int stride_id = 1;
+  constexpr double init_radius = 0.5;
+  constexpr double num_multi_draws = 1000;
+  constexpr int num_paths = 4;
+  constexpr double num_elbo_draws = 1000;
+  constexpr double num_draws = 2000;
+  constexpr int history_size = 15;
+  constexpr double init_alpha = 1;
+  constexpr double tol_obj = 0;
+  constexpr double tol_rel_obj = 0;
+  constexpr double tol_grad = 2e-4;
+  constexpr double tol_rel_grad = 2e-6;
+  constexpr double tol_param = 0;
+  constexpr int num_iterations = 220;
+  constexpr bool save_iterations = false;
+  constexpr int refresh = 0;
+  constexpr int calculate_lp = true;
+  constexpr int resample = true;
+
+  std::unique_ptr<std::stringstream> string_ostream(new std::stringstream{});
+  stan::test::test_logger logger(std::move(string_ostream));
+  std::vector<stan::callbacks::unique_stream_writer<std::ofstream>>
+      single_path_parameter_writer;
+  stan::test::init_null_writers(single_path_parameter_writer, num_paths);
+  std::vector<stan::callbacks::json_writer<std::stringstream>>
+      single_path_diagnostic_writer(num_paths);
+  using init_context_t = decltype(init_init_context());
+  std::vector<std::unique_ptr<init_context_t>> single_path_inits;
+  for (int i = 0; i < num_paths; ++i) {
+    single_path_inits.emplace_back(
+        std::make_unique<init_context_t>(init_init_context()));
+  }
+  stan::test::mock_callback callback;
+  int rc = stan::services::pathfinder::pathfinder_lbfgs_multi(
+      model, single_path_inits, seed, stride_id, init_radius, history_size,
+      init_alpha, tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param,
+      num_iterations, num_elbo_draws, num_draws, num_multi_draws, num_paths,
+      save_iterations, refresh, callback, logger,
+      std::vector<stan::callbacks::stream_writer>(num_paths, init),
+      single_path_parameter_writer, single_path_diagnostic_writer, parameter,
+      diagnostics, calculate_lp, resample);
+  ASSERT_EQ(rc, 0);
+  Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, 0, ", ", ", ", "\n", "",
+                               "", "");
+  Eigen::MatrixXd param_vals = parameter.get_eigen_state_values();
+  EXPECT_EQ(11, param_vals.cols());
+  EXPECT_EQ(1000, param_vals.rows());
+  // They can be in any order and any number
+  for (Eigen::Index i = 0; i < num_multi_draws; i++) {
+    EXPECT_GE(param_vals.col(2)(i), 0);
+    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+  }
+  auto param_tmp = param_vals(Eigen::all, param_indices);
+  auto mean_sd_pair = stan::test::get_mean_sd(param_tmp);
+  auto&& mean_vals = mean_sd_pair.first;
+  auto&& sd_vals = mean_sd_pair.second;
+  auto prev_param_summary = stan::test::normal_glm_param_summary();
+  Eigen::Matrix<double, 1, 10> prev_mean_vals = prev_param_summary.first;
+  Eigen::Matrix<double, 1, 10> prev_sd_vals = prev_param_summary.second;
+  Eigen::RowVectorXd ans_mean_diff = mean_vals - prev_mean_vals;
+  Eigen::RowVectorXd ans_sd_diff = sd_vals - prev_sd_vals;
+  Eigen::MatrixXd all_mean_vals(3, 10);
+  all_mean_vals.row(0) = mean_vals;
+  all_mean_vals.row(1) = prev_mean_vals;
+  all_mean_vals.row(2) = ans_mean_diff;
+  Eigen::MatrixXd all_sd_vals(3, 10);
+  all_sd_vals.row(0) = sd_vals;
+  all_sd_vals.row(1) = prev_sd_vals;
+  all_sd_vals.row(2) = ans_sd_diff;
+  // True Sd's are all 1 and true means are -4, -2, 0, 1, 3, -1
+  for (int i = 2; i < all_mean_vals.cols(); ++i) {
+    EXPECT_NEAR(0, all_mean_vals(2, i), .01);
+  }
+  for (int i = 2; i < all_mean_vals.cols(); ++i) {
+    EXPECT_NEAR(0, all_sd_vals(2, i), 1e-2);
   }
 }
 

@@ -47,6 +47,12 @@ class writer {
   virtual void operator()(const std::string& message) {}
 
   /**
+   * Checks if stream is valid.
+   */
+  virtual bool is_nonnull() const noexcept { return false; }
+  virtual const char* comment_prefix() const noexcept { return "# "; }
+
+  /**
    * Writes multiple rows and columns of values in csv format.
    *
    * Note: the precision of the output is determined by the settings

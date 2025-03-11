@@ -113,6 +113,16 @@ class unique_stream_writer final : public writer {
       return;
     *output_ << comment_prefix_ << message << std::endl;
   }
+
+  /**
+   * Checks if stream is valid.
+   */
+  bool is_nonnull() const noexcept { return output_ != nullptr; }
+
+  const char* comment_prefix() const noexcept {
+    return comment_prefix_.c_str();
+  }
+
  private:
   /**
    * Comma formatter for writing Eigen matrices
@@ -140,12 +150,11 @@ class unique_stream_writer final : public writer {
    */
   template <class T>
   void write_vector(const std::vector<T>& v) {
-    std::stringstream ss;
-    if (output_ == nullptr)
-      return;
-    if (v.empty()) {
+    if (output_ == nullptr || v.empty()) {
       return;
     }
+    std::stringstream ss;
+    ss.copyfmt(*output_);
     auto last = v.end();
     --last;
     for (auto it = v.begin(); it != last; ++it) {
