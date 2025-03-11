@@ -250,6 +250,10 @@ class stan_csv_reader {
 
     int rows = lines - 3;
     int cols = std::count(line.begin(), line.end(), ',') + 1;
+    if (cols == 1) {
+      // model has no parameters
+      return;
+    }
     adaptation.metric.resize(rows, cols);
     char comment;  // Buffer for comment indicator, #
 
@@ -330,7 +334,11 @@ class stan_csv_reader {
         for (int col = 0; col < cols; col++) {
           std::getline(ls, line, ',');
           boost::trim(line);
-          std::stringstream(line) >> samples(row, col);
+          try {
+            samples(row, col) = static_cast<double>(std::stold(line));
+          } catch (const std::out_of_range& e) {
+            samples(row, col) = std::numeric_limits<double>::quiet_NaN();
+          }
         }
       }
     }
