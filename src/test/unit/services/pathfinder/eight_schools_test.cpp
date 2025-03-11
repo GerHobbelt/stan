@@ -58,6 +58,9 @@ class ServicesPathfinderEightSchools : public testing::Test {
   stan_model model;
 };
 
+constexpr std::array param_indices{0,  1,  3,  4,  5,  6,  7,  8,  9,  10,
+                                   11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
+
 auto init_init_context() { return stan::io::empty_var_context(); }
 
 TEST_F(ServicesPathfinderEightSchools, multi) {
@@ -79,6 +82,8 @@ TEST_F(ServicesPathfinderEightSchools, multi) {
   // bool save_iterations = true;
   constexpr int refresh = 1;
   constexpr bool save_iterations = false;
+  constexpr bool calculate_lp = true;
+  constexpr bool resample = true;
   std::unique_ptr<std::ostream> empty_ostream(nullptr);
   stan::test::test_logger logger(std::move(empty_ostream));
   std::vector<stan::callbacks::writer> single_path_parameter_writer(num_paths);
@@ -98,28 +103,22 @@ TEST_F(ServicesPathfinderEightSchools, multi) {
       save_iterations, refresh, callback, logger,
       std::vector<stan::callbacks::stream_writer>(num_paths, init),
       single_path_parameter_writer, single_path_diagnostic_writer, parameter,
-      diagnostics);
-
-  Eigen::MatrixXd param_vals(parameter.eigen_states_.size(),
-                             parameter.eigen_states_[0].size());
-  for (size_t i = 0; i < parameter.eigen_states_.size(); ++i) {
-    param_vals.row(i) = parameter.eigen_states_[i];
-  }
+      diagnostics, calculate_lp, resample);
 
   Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, 0, ", ", ", ", "\n", "",
                                "", "");
-
-  Eigen::RowVectorXd mean_vals = param_vals.colwise().mean();
-  Eigen::RowVectorXd sd_vals = ((param_vals.rowwise() - mean_vals)
-                                    .array()
-                                    .square()
-                                    .matrix()
-                                    .colwise()
-                                    .sum()
-                                    .array()
-                                / (param_vals.rows() - 1))
-                                   .sqrt();
-
+  Eigen::MatrixXd param_vals = parameter.get_eigen_state_values();
+  EXPECT_EQ(param_vals.cols(), 21);
+  EXPECT_EQ(param_vals.rows(), 10000);
+  // They can be in any order and any number
+  for (Eigen::Index i = 0; i < num_multi_draws; i++) {
+    EXPECT_GE(param_vals.col(2)(i), 0);
+    EXPECT_LE(param_vals.col(2)(i), num_paths - 1);
+  }
+  auto param_tmp = param_vals(Eigen::all, param_indices);
+  auto mean_sd_pair = stan::test::get_mean_sd(param_tmp);
+  auto&& mean_vals = mean_sd_pair.first;
+  auto&& sd_vals = mean_sd_pair.second;
   Eigen::RowVectorXd r_mean_vals(20);
   r_mean_vals << -17.9537, -47.016, 1.89104, 3.66449, 0.22256, 0.119645,
       -0.146812, 0.23633, -0.244868, -0.227134, 0.504507, 0.0476979, 3.66491,
@@ -173,20 +172,14 @@ TEST_F(ServicesPathfinderEightSchools, single) {
   Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, 0, ", ", ", ", "\n", "",
                                "", "");
 
-  Eigen::MatrixXd param_vals = std::move(parameter.values_);
-
-  Eigen::VectorXd mean_vals = param_vals.rowwise().mean().eval();
-  Eigen::VectorXd sd_vals = (((param_vals.colwise() - mean_vals)
-                                  .array()
-                                  .square()
-                                  .matrix()
-                                  .rowwise()
-                                  .sum()
-                                  .array()
-                              / (param_vals.cols() - 1))
-                                 .sqrt())
-                                .transpose()
-                                .eval();
+  Eigen::MatrixXd param_vals = parameter.get_eigen_state_values();
+  for (auto&& x_i : param_vals.col(2)) {
+    EXPECT_EQ(x_i, stride_id);
+  }
+  auto param_tmp = param_vals(Eigen::all, param_indices);
+  auto mean_sd_pair = stan::test::get_mean_sd(param_tmp);
+  auto&& mean_vals = mean_sd_pair.first;
+  auto&& sd_vals = mean_sd_pair.second;
 
   Eigen::MatrixXd r_answer = stan::test::eight_schools_r_answer();
 
@@ -244,9 +237,10 @@ TEST_F(ServicesPathfinderEightSchools, single) {
       r_constrainted_draws_mat.col(i) = constrained_draws2;
     }
   }
-  Eigen::VectorXd mean_r_vals = r_constrainted_draws_mat.rowwise().mean();
-  Eigen::VectorXd sd_r_vals
-      = (((r_constrainted_draws_mat.colwise() - mean_r_vals)
+  Eigen::RowVectorXd mean_r_vals
+      = r_constrainted_draws_mat.rowwise().mean().transpose();
+  Eigen::RowVectorXd sd_r_vals
+      = (((r_constrainted_draws_mat.colwise() - mean_r_vals.transpose())
               .array()
               .square()
               .matrix()
@@ -262,7 +256,6 @@ TEST_F(ServicesPathfinderEightSchools, single) {
   all_mean_vals.row(0) = mean_vals;
   all_mean_vals.row(1) = mean_r_vals;
   all_mean_vals.row(2) = mean_vals - mean_r_vals;
-
   Eigen::MatrixXd all_sd_vals(3, 20);
   all_sd_vals.row(0) = sd_vals;
   all_sd_vals.row(1) = sd_r_vals;
