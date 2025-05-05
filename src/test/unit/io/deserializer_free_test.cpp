@@ -272,6 +272,15 @@ TEST(deserializer_vector, read_free_sum_to_zero) {
                     SumToZeroConstrain>(std::make_tuple(3, 2, 4));
 }
 
+TEST(deserializer_matrix, read_free_sum_to_zero) {
+  using stan::test::deserializer_test;
+  deserializer_test<Eigen::MatrixXd, SumToZeroConstrain>(std::make_tuple(4, 5));
+  deserializer_test<std::vector<Eigen::MatrixXd>, SumToZeroConstrain>(
+      std::make_tuple(2, 4, 5));
+  deserializer_test<std::vector<std::vector<Eigen::MatrixXd>>,
+                    SumToZeroConstrain>(std::make_tuple(3, 2, 4, 2));
+}
+
 // ordered
 template <typename Ret>
 struct OrderedConstrain {
