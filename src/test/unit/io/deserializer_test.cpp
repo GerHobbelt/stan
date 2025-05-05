@@ -728,10 +728,26 @@ TEST(deserializer_matrix, sum_to_zero_constrain) {
   Eigen::MatrixXd phi(
       deserializer.read_constrain_sum_to_zero<Eigen::MatrixXd, false>(lp, 3,
                                                                       3));
-  for (int i = 0; i < phi.rows(); ++i) {
-    for (int j = 0; j < phi.cols(); ++j) {
-      EXPECT_FLOAT_EQ(reference(i, j), phi(i, j));
-    }
+  for (int n = 0; n < phi.size(); ++n) {
+    EXPECT_FLOAT_EQ(reference(n), phi(n));
+  }
+}
+
+TEST(deserializer_matrix, sum_to_zero_constrain_empty) {
+  std::vector<int> theta_i;
+  std::vector<double> theta;
+
+  stan::io::deserializer<double> deserializer(theta, theta_i);
+  double lp = 0.0;
+
+  Eigen::MatrixXd phi(
+      deserializer.read_constrain_sum_to_zero<Eigen::MatrixXd, false>(lp, 1,
+                                                                      1));
+
+  EXPECT_EQ(1, phi.rows());
+  EXPECT_EQ(1, phi.cols());
+  for (int n = 0; n < phi.size(); ++n) {
+    EXPECT_FLOAT_EQ(0.0, phi(n));
   }
 }
 
@@ -749,10 +765,8 @@ TEST(deserializer_matrix, sum_to_zero_jacobian) {
       stan::math::to_matrix(theta, 2, 2), lp_ref);
   Eigen::MatrixXd phi(
       deserializer.read_constrain_sum_to_zero<Eigen::MatrixXd, true>(lp, 3, 3));
-  for (int i = 0; i < phi.rows(); ++i) {
-    for (int j = 0; j < phi.cols(); ++j) {
-      EXPECT_FLOAT_EQ(reference(i, j), phi(i, j));
-    }
+  for (int n = 0; n < phi.size(); ++n) {
+    EXPECT_FLOAT_EQ(reference(n), phi(n));
   }
   EXPECT_FLOAT_EQ(lp_ref, lp);
 }

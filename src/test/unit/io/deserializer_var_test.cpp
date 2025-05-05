@@ -656,10 +656,8 @@ TEST(deserializer_matrix, sum_to_zero_constrain) {
       deserializer.read_constrain_sum_to_zero<
           Eigen::Matrix<stan::math::var, Eigen::Dynamic, Eigen::Dynamic>,
           false>(lp, 3, 3));
-  for (int i = 0; i < phi.rows(); ++i) {
-    for (int j = 0; j < phi.cols(); ++j) {
-      EXPECT_FLOAT_EQ(reference(i, j).val(), phi(i, j).val());
-    }
+  for (int n = 0; n < phi.size(); ++n) {
+    EXPECT_FLOAT_EQ(reference(n).val(), phi(n).val());
   }
 }
 
@@ -680,10 +678,8 @@ TEST(deserializer_matrix, sum_to_zero_jacobian) {
       deserializer.read_constrain_sum_to_zero<
           Eigen::Matrix<stan::math::var, Eigen::Dynamic, Eigen::Dynamic>, true>(
           lp, 3, 3));
-  for (int i = 0; i < phi.rows(); ++i) {
-    for (int j = 0; j < phi.cols(); ++j) {
-      EXPECT_FLOAT_EQ(reference(i, j).val(), phi(i, j).val());
-    }
+  for (int n = 0; n < phi.size(); ++n) {
+    EXPECT_FLOAT_EQ(reference(n).val(), phi(n).val());
   }
   EXPECT_FLOAT_EQ(lp_ref.val(), lp.val());
 }
