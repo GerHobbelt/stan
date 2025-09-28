@@ -1198,7 +1198,6 @@ TEST(model_indexing, tuples_non_trivially_assignable) {
       A, B);
 }
 
-
 TEST(model_indexing, stdvec_of_eigvec_errors) {
   using stan::model::assign;
   using stan::model::index_min_max;

@@ -791,6 +791,10 @@ inline void assign(T&& x, U&& y, const char* name) {
     }
   }
 
+  // If we've made it this far, we need x to have elements to assign to,
+  // and we know this is either a no-op or x has size 0, which we treat as
+  // a wildcard that can take any size.
+  x.resize(y.size());
   if constexpr (std::is_rvalue_reference_v<U&&>) {
     for (size_t i = 0; i < y.size(); ++i) {
       assign(x[i], std::move(y[i]), name);
