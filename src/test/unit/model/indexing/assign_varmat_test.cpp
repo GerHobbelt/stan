@@ -1551,7 +1551,7 @@ inline void assign_tester(T1&& x, const I1& idx1, const I2& idx2) {
   // Since this just moves the pointer x1 omni is diff than
   // multi
   if constexpr (!std::is_same<I1, index_omni>::value
-      && !std::is_same<I2, index_omni>::value) {
+                && !std::is_same<I2, index_omni>::value) {
     EXPECT_MATRIX_EQ(x1.val(), x2.val());
     EXPECT_MATRIX_EQ(x1.adj(), x2.adj());
     EXPECT_MATRIX_EQ(y.adj(),

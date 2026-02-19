@@ -578,7 +578,7 @@ class model_base : public prob_grad {
       return log_prob_propto(params_r, params_i, msgs);
     } else if constexpr (!propto && jacobian) {
       return log_prob_jacobian(params_r, params_i, msgs);
-    } else { // if (!propto && !jacobian)
+    } else {  // if (!propto && !jacobian)
       return log_prob(params_r, params_i, msgs);
     }
   }

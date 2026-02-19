@@ -882,8 +882,9 @@ inline void assign(T&& x, U&& y, const char* name, const Idx1& idx1,
                    const Idxs&... idxs) {
   int x_idx_size = rvalue_index_size(idx1, x.size());
   // If there is a reverse min_max index or negative max index
-  constexpr bool is_idx1_minmax_or_max = std::is_same<std::decay_t<Idx1>, index_min_max>::value
-      || std::is_same<std::decay_t<Idx1>, index_max>::value;
+  constexpr bool is_idx1_minmax_or_max
+      = std::is_same<std::decay_t<Idx1>, index_min_max>::value
+        || std::is_same<std::decay_t<Idx1>, index_max>::value;
   if constexpr (is_idx1_minmax_or_max) {
     if (x_idx_size == 0) {
       if constexpr (std::is_same<std::decay_t<Idx1>, index_min_max>::value) {
